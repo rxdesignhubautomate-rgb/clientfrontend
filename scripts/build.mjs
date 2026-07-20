@@ -11,8 +11,7 @@ fs.mkdirSync(output, { recursive: true });
 fs.cpSync(source, output, { recursive: true });
 
 const config = {
-  apiBaseUrl: String(process.env.CRM_API_BASE_URL || "https://rxclientsbases.onrender.com/api/v1").replace(/\/$/, ""),
-  firebaseApiKey: process.env.FIREBASE_WEB_API_KEY || ""
+  apiBaseUrl: String(process.env.CRM_API_BASE_URL || "https://rxclientsbases.onrender.com/api/v1").replace(/\/$/, "")
 };
 fs.writeFileSync(path.join(output, "config.js"), `window.__CRM_CONFIG__ = ${JSON.stringify(config)};\n`);
 console.log(`Built CRM frontend at ${output}`);

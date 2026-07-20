@@ -27,12 +27,13 @@
           <div class="mobile-brand brand"><span class="brand-mark">RX</span><span>Client CRM</span></div>
           <p class="eyebrow">SECURE ACCESS</p>
           <h2>Welcome back</h2>
-          <p class="muted">Sign in with your CRM account.</p>
+          <p class="muted">Enter your approved CRM login ID.</p>
           <label>Email<input id="login-email" type="email" autocomplete="email" required placeholder="you@rxdesignhub.com" /></label>
-          <label>Password<input id="login-password" type="password" autocomplete="current-password" required placeholder="••••••••" /></label>
+          <label id="otp-field" hidden>6-digit OTP<input id="login-otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="Enter OTP" /></label>
           <p id="login-error" class="form-error" hidden></p>
-          <button class="button button-primary button-full" type="submit">Sign in <span>→</span></button>
-          <p class="login-help">Account access is controlled by Firebase Authentication.</p>
+          <button id="login-submit" class="button button-primary button-full" type="submit">Send OTP <span>→</span></button>
+          <button id="otp-back" class="login-back" type="button" hidden>Use another login ID</button>
+          <p id="login-help" class="login-help">OTP will be delivered only to the registered RX inbox.</p>
         </form>
       </div>
     </section>
@@ -43,7 +44,7 @@
         <nav>
           <a data-route="dashboard" href="#dashboard"><span class="nav-icon">⌂</span>Overview</a>
           <a data-route="clients" href="#clients"><span class="nav-icon">◫</span>Clients</a>
-          <a data-route="import" href="#import"><span class="nav-icon">⇧</span>Import register</a>
+          <a data-route="import" data-owner-only href="#import"><span class="nav-icon">⇧</span>Import register</a>
         </nav>
         <div class="sidebar-foot">
           <div class="user-chip"><span id="user-avatar">R</span><div><strong id="user-email">CRM User</strong><small>RX Design Hub</small></div></div>

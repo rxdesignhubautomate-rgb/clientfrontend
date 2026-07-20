@@ -2,6 +2,7 @@ const config = window.__CRM_CONFIG__ || {};
 const authKey = "rx-crm-session-v1";
 const state = {
   session: readSession(),
+  otpEmail: null,
   importPayload: null,
   importPreview: null
 };
@@ -13,42 +14,54 @@ const pageTitle = document.querySelector("#page-title");
 const toast = document.querySelector("#toast");
 
 document.querySelector("#login-form").addEventListener("submit", login);
+document.querySelector("#otp-back").addEventListener("click", resetOtpLogin);
 document.querySelector("#logout-button").addEventListener("click", logout);
 document.querySelector("#menu-button").addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
 window.addEventListener("hashchange", renderRoute);
 
-if (state.session) boot();
-else showLogin();
+if (state.session?.accessToken) boot();
+else {
+  localStorage.removeItem(authKey);
+  state.session = null;
+  showLogin();
+}
 
 async function login(event) {
   event.preventDefault();
   const button = event.submitter;
   const error = document.querySelector("#login-error");
   error.hidden = true;
-  if (!config.firebaseApiKey) {
-    error.textContent = "FIREBASE_WEB_API_KEY is missing in Vercel environment variables.";
-    error.hidden = false;
-    return;
-  }
   button.disabled = true;
-  button.textContent = "Signing in…";
+  button.textContent = state.otpEmail ? "Verifying OTP…" : "Sending OTP…";
   try {
-    const response = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(config.firebaseApiKey)}`, {
+    const email = (state.otpEmail || document.querySelector("#login-email").value).trim().toLowerCase();
+    const endpoint = state.otpEmail ? "/auth/otp/verify" : "/auth/otp/request";
+    const body = state.otpEmail
+      ? { email, code: document.querySelector("#login-otp").value.trim() }
+      : { email };
+    const response = await fetch(`${config.apiBaseUrl}${endpoint}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        email: document.querySelector("#login-email").value.trim(),
-        password: document.querySelector("#login-password").value,
-        returnSecureToken: true
-      })
+      body: JSON.stringify(body)
     });
     const payload = await response.json();
-    if (!response.ok) throw new Error(readFirebaseError(payload));
+    if (!response.ok) throw new Error(readApiError(payload));
+    if (!state.otpEmail) {
+      state.otpEmail = email;
+      document.querySelector("#login-email").disabled = true;
+      document.querySelector("#otp-field").hidden = false;
+      document.querySelector("#login-otp").required = true;
+      document.querySelector("#otp-back").hidden = false;
+      document.querySelector("#login-help").textContent = `OTP sent to ${payload.data.deliveryHint}. It expires in 10 minutes.`;
+      document.querySelector("#login-otp").focus();
+      return;
+    }
     state.session = {
-      email: payload.email,
-      idToken: payload.idToken,
-      refreshToken: payload.refreshToken,
-      expiresAt: Date.now() + Number(payload.expiresIn || 3600) * 1000
+      email: payload.data.user.email,
+      name: payload.data.user.name,
+      role: payload.data.user.role,
+      accessToken: payload.data.accessToken,
+      expiresAt: Date.now() + Number(payload.data.expiresInSeconds || 43200) * 1000
     };
     saveSession();
     await boot();
@@ -57,8 +70,21 @@ async function login(event) {
     error.hidden = false;
   } finally {
     button.disabled = false;
-    button.innerHTML = "Sign in <span>→</span>";
+    button.innerHTML = state.session ? "Signed in" : state.otpEmail ? "Verify & sign in <span>→</span>" : "Send OTP <span>→</span>";
   }
+}
+
+function resetOtpLogin() {
+  state.otpEmail = null;
+  const email = document.querySelector("#login-email");
+  email.disabled = false;
+  document.querySelector("#login-otp").value = "";
+  document.querySelector("#login-otp").required = false;
+  document.querySelector("#otp-field").hidden = true;
+  document.querySelector("#otp-back").hidden = true;
+  document.querySelector("#login-error").hidden = true;
+  document.querySelector("#login-help").textContent = "OTP will be delivered only to the registered RX inbox.";
+  document.querySelector("#login-submit").innerHTML = "Send OTP <span>→</span>";
 }
 
 async function boot() {
@@ -67,6 +93,9 @@ async function boot() {
   const email = state.session?.email || "CRM User";
   document.querySelector("#user-email").textContent = email;
   document.querySelector("#user-avatar").textContent = email.slice(0, 1).toUpperCase();
+  document.querySelectorAll("[data-owner-only]").forEach((element) => {
+    element.hidden = !["OWNER", "ADMIN"].includes(state.session?.role);
+  });
   if (!location.hash) location.hash = "#dashboard";
   await renderRoute();
 }
@@ -81,43 +110,28 @@ function logout() {
   state.session = null;
   state.importPayload = null;
   state.importPreview = null;
+  resetOtpLogin();
   location.hash = "";
   showLogin();
 }
 
-async function refreshToken() {
-  if (!state.session?.refreshToken) throw new Error("Session expired. Please sign in again.");
-  const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: state.session.refreshToken });
-  const response = await fetch(`https://securetoken.googleapis.com/v1/token?key=${encodeURIComponent(config.firebaseApiKey)}`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error("Session expired. Please sign in again.");
-  state.session.idToken = payload.id_token;
-  state.session.refreshToken = payload.refresh_token;
-  state.session.expiresAt = Date.now() + Number(payload.expires_in || 3600) * 1000;
-  saveSession();
-}
-
-async function api(path, options = {}, retry = true) {
+async function api(path, options = {}) {
   if (!state.session) throw new Error("Authentication required");
-  if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshToken();
+  if (Date.now() > Number(state.session.expiresAt || 0)) {
+    logout();
+    throw new Error("Session expired. Please sign in again.");
+  }
   const response = await fetch(`${config.apiBaseUrl}${path}`, {
     ...options,
     headers: {
-      authorization: `Bearer ${state.session.idToken}`,
+      authorization: `Bearer ${state.session.accessToken}`,
       "content-type": "application/json",
       ...(options.headers || {})
     },
     body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body
   });
-  if (response.status === 401 && retry) {
-    await refreshToken();
-    return api(path, options, false);
-  }
   const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) logout();
   if (!response.ok) throw new Error(payload.error?.message || payload.message || `Request failed (${response.status})`);
   return payload;
 }
@@ -127,6 +141,10 @@ async function renderRoute() {
   document.querySelector(".sidebar").classList.remove("open");
   const route = (location.hash.replace(/^#/, "") || "dashboard").split("/");
   const base = route[0];
+  if (base === "import" && !["OWNER", "ADMIN"].includes(state.session?.role)) {
+    location.hash = "#dashboard";
+    return;
+  }
   document.querySelectorAll("[data-route]").forEach((link) => link.classList.toggle("active", link.dataset.route === base || (base === "client" && link.dataset.route === "clients")));
   page.innerHTML = '<div class="loading-card">Loading…</div>';
   try {
@@ -157,7 +175,7 @@ async function renderDashboard() {
     <div class="quick-grid">
       <section class="panel"><h3>Client-first workflow</h3><p>Keep orders, payments and conversations attached to one permanent client profile.</p><div class="action-list">
         <a class="action-row" href="#clients"><div><strong>Search client records</strong><span>Find by company, person or phone</span></div><b>→</b></a>
-        <a class="action-row" href="#import"><div><strong>Import order register</strong><span>Preview and deduplicate before saving</span></div><b>→</b></a>
+        ${["OWNER", "ADMIN"].includes(state.session?.role) ? '<a class="action-row" href="#import"><div><strong>Import order register</strong><span>Preview and deduplicate before saving</span></div><b>→</b></a>' : ""}
       </div></section>
       <section class="panel accent-panel"><h3>WhatsApp is connected</h3><p>Future incoming messages can attach to existing clients through their normalized phone number.</p><a class="button" href="#clients">Open client directory</a></section>
     </div>`;
@@ -354,6 +372,6 @@ function initials(value) { return String(value || "RX").split(/\s+/).filter(Bool
 function esc(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
 function attr(value) { return esc(value); }
 function notify(message, error = false) { toast.textContent = message; toast.className = `toast${error ? " error" : ""}`; toast.hidden = false; clearTimeout(notify.timer); notify.timer = setTimeout(() => { toast.hidden = true; }, 5000); }
-function readFirebaseError(payload) { const code = payload.error?.message || "SIGN_IN_FAILED"; return ({ EMAIL_NOT_FOUND: "No account found for this email.", INVALID_PASSWORD: "Incorrect password.", INVALID_LOGIN_CREDENTIALS: "Incorrect email or password.", USER_DISABLED: "This account is disabled." })[code] || code.replace(/_/g, " ").toLowerCase(); }
+function readApiError(payload) { return payload.error?.message || payload.message || "Login failed. Please try again."; }
 function readSession() { try { return JSON.parse(localStorage.getItem(authKey)); } catch { return null; } }
 function saveSession() { localStorage.setItem(authKey, JSON.stringify(state.session)); }
