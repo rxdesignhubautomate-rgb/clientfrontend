@@ -1,0 +1,10 @@
+{
+  "name": "rx-client-crm-web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/dev.mjs"
+  }
+}

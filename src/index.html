@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111b34" />
+    <title>RX Client CRM</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div id="toast" class="toast" hidden></div>
+    <section id="login-view" class="login-page">
+      <div class="login-art">
+        <div class="brand brand-large"><span class="brand-mark">RX</span><span>Client CRM</span></div>
+        <div class="login-copy">
+          <p class="eyebrow">RX DESIGN HUB</p>
+          <h1>Every client.<br />Every order.<br /><em>One clear view.</em></h1>
+          <p>Existing clients, order history, payments, follow-ups and WhatsApp conversations—connected in one workspace.</p>
+        </div>
+        <div class="art-orb art-orb-one"></div><div class="art-orb art-orb-two"></div>
+      </div>
+      <div class="login-panel">
+        <form id="login-form" class="login-card">
+          <div class="mobile-brand brand"><span class="brand-mark">RX</span><span>Client CRM</span></div>
+          <p class="eyebrow">SECURE ACCESS</p>
+          <h2>Welcome back</h2>
+          <p class="muted">Sign in with your CRM account.</p>
+          <label>Email<input id="login-email" type="email" autocomplete="email" required placeholder="you@rxdesignhub.com" /></label>
+          <label>Password<input id="login-password" type="password" autocomplete="current-password" required placeholder="••••••••" /></label>
+          <p id="login-error" class="form-error" hidden></p>
+          <button class="button button-primary button-full" type="submit">Sign in <span>→</span></button>
+          <p class="login-help">Account access is controlled by Firebase Authentication.</p>
+        </form>
+      </div>
+    </section>
+
+    <div id="app-shell" class="app-shell" hidden>
+      <aside class="sidebar">
+        <a class="brand sidebar-brand" href="#dashboard"><span class="brand-mark">RX</span><span>Client CRM</span></a>
+        <nav>
+          <a data-route="dashboard" href="#dashboard"><span class="nav-icon">⌂</span>Overview</a>
+          <a data-route="clients" href="#clients"><span class="nav-icon">◫</span>Clients</a>
+          <a data-route="import" href="#import"><span class="nav-icon">⇧</span>Import register</a>
+        </nav>
+        <div class="sidebar-foot">
+          <div class="user-chip"><span id="user-avatar">R</span><div><strong id="user-email">CRM User</strong><small>RX Design Hub</small></div></div>
+          <button id="logout-button" class="text-button">Sign out</button>
+        </div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <button id="menu-button" class="menu-button" aria-label="Menu">☰</button>
+          <div><p class="eyebrow">CLIENT OPERATIONS</p><h2 id="page-title">Overview</h2></div>
+          <div class="live-pill"><i></i> Live</div>
+        </header>
+        <div id="page" class="page"><div class="loading-card">Loading CRM…</div></div>
+      </main>
+    </div>
+
+    <script src="/config.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
