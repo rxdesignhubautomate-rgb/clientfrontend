@@ -27,13 +27,12 @@
           <div class="mobile-brand brand"><span class="brand-mark">RX</span><span>Client CRM</span></div>
           <p class="eyebrow">SECURE ACCESS</p>
           <h2>Welcome back</h2>
-          <p class="muted">Enter your approved CRM login ID.</p>
+          <p class="muted">Sign in with your approved Firebase account.</p>
           <label>Email<input id="login-email" type="email" autocomplete="email" required placeholder="you@rxdesignhub.com" /></label>
-          <label id="otp-field" hidden>6-digit OTP<input id="login-otp" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="Enter OTP" /></label>
+          <label>Password<input id="login-password" type="password" autocomplete="current-password" minlength="6" required placeholder="Enter password" /></label>
           <p id="login-error" class="form-error" hidden></p>
-          <button id="login-submit" class="button button-primary button-full" type="submit">Send OTP <span>→</span></button>
-          <button id="otp-back" class="login-back" type="button" hidden>Use another login ID</button>
-          <p id="login-help" class="login-help">OTP will be delivered only to the registered RX inbox.</p>
+          <button id="login-submit" class="button button-primary button-full" type="submit">Sign in <span>→</span></button>
+          <p id="login-help" class="login-help">Account access is controlled by Firebase Authentication.</p>
         </form>
       </div>
     </section>

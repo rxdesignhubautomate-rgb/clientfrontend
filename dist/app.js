@@ -2,7 +2,6 @@ const config = window.__CRM_CONFIG__ || {};
 const authKey = "rx-crm-session-v1";
 const state = {
   session: readSession(),
-  otpEmail: null,
   importPayload: null,
   importPreview: null
 };
@@ -14,7 +13,6 @@ const pageTitle = document.querySelector("#page-title");
 const toast = document.querySelector("#toast");
 
 document.querySelector("#login-form").addEventListener("submit", login);
-document.querySelector("#otp-back").addEventListener("click", resetOtpLogin);
 document.querySelector("#logout-button").addEventListener("click", logout);
 document.querySelector("#menu-button").addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
 window.addEventListener("hashchange", renderRoute);
@@ -32,37 +30,26 @@ async function login(event) {
   const error = document.querySelector("#login-error");
   error.hidden = true;
   button.disabled = true;
-  button.textContent = state.otpEmail ? "Verifying OTP…" : "Sending OTP…";
+  button.textContent = "Signing in…";
   try {
-    const email = (state.otpEmail || document.querySelector("#login-email").value).trim().toLowerCase();
-    const endpoint = state.otpEmail ? "/auth/otp/verify" : "/auth/otp/request";
-    const body = state.otpEmail
-      ? { email, code: document.querySelector("#login-otp").value.trim() }
-      : { email };
-    const response = await fetch(`${config.apiBaseUrl}${endpoint}`, {
+    const email = document.querySelector("#login-email").value.trim().toLowerCase();
+    const password = document.querySelector("#login-password").value;
+    const response = await fetch(`${config.apiBaseUrl}/auth/password/login`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body)
+      body: JSON.stringify({ email, password })
     });
     const payload = await response.json();
     if (!response.ok) throw new Error(readApiError(payload));
-    if (!state.otpEmail) {
-      state.otpEmail = email;
-      document.querySelector("#login-email").disabled = true;
-      document.querySelector("#otp-field").hidden = false;
-      document.querySelector("#login-otp").required = true;
-      document.querySelector("#otp-back").hidden = false;
-      document.querySelector("#login-help").textContent = `OTP sent to ${payload.data.deliveryHint}. It expires in 10 minutes.`;
-      document.querySelector("#login-otp").focus();
-      return;
-    }
     state.session = {
       email: payload.data.user.email,
       name: payload.data.user.name,
       role: payload.data.user.role,
       accessToken: payload.data.accessToken,
-      expiresAt: Date.now() + Number(payload.data.expiresInSeconds || 43200) * 1000
+      refreshToken: payload.data.refreshToken,
+      expiresAt: Date.now() + Number(payload.data.expiresInSeconds || 3600) * 1000
     };
+    document.querySelector("#login-password").value = "";
     saveSession();
     await boot();
   } catch (loginError) {
@@ -70,21 +57,14 @@ async function login(event) {
     error.hidden = false;
   } finally {
     button.disabled = false;
-    button.innerHTML = state.session ? "Signed in" : state.otpEmail ? "Verify & sign in <span>→</span>" : "Send OTP <span>→</span>";
+    button.innerHTML = state.session ? "Signed in" : "Sign in <span>→</span>";
   }
 }
 
-function resetOtpLogin() {
-  state.otpEmail = null;
-  const email = document.querySelector("#login-email");
-  email.disabled = false;
-  document.querySelector("#login-otp").value = "";
-  document.querySelector("#login-otp").required = false;
-  document.querySelector("#otp-field").hidden = true;
-  document.querySelector("#otp-back").hidden = true;
+function resetPasswordLogin() {
+  document.querySelector("#login-password").value = "";
   document.querySelector("#login-error").hidden = true;
-  document.querySelector("#login-help").textContent = "OTP will be delivered only to the registered RX inbox.";
-  document.querySelector("#login-submit").innerHTML = "Send OTP <span>→</span>";
+  document.querySelector("#login-submit").innerHTML = "Sign in <span>→</span>";
 }
 
 async function boot() {
@@ -110,17 +90,14 @@ function logout() {
   state.session = null;
   state.importPayload = null;
   state.importPreview = null;
-  resetOtpLogin();
+  resetPasswordLogin();
   location.hash = "";
   showLogin();
 }
 
 async function api(path, options = {}) {
   if (!state.session) throw new Error("Authentication required");
-  if (Date.now() > Number(state.session.expiresAt || 0)) {
-    logout();
-    throw new Error("Session expired. Please sign in again.");
-  }
+  if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
   const response = await fetch(`${config.apiBaseUrl}${path}`, {
     ...options,
     headers: {
@@ -134,6 +111,32 @@ async function api(path, options = {}) {
   if (response.status === 401) logout();
   if (!response.ok) throw new Error(payload.error?.message || payload.message || `Request failed (${response.status})`);
   return payload;
+}
+
+async function refreshSession() {
+  if (!state.session?.refreshToken) {
+    logout();
+    throw new Error("Session expired. Please sign in again.");
+  }
+  const response = await fetch(`${config.apiBaseUrl}/auth/password/refresh`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ refreshToken: state.session.refreshToken })
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    logout();
+    throw new Error(readApiError(payload));
+  }
+  state.session = {
+    email: payload.data.user.email,
+    name: payload.data.user.name,
+    role: payload.data.user.role,
+    accessToken: payload.data.accessToken,
+    refreshToken: payload.data.refreshToken,
+    expiresAt: Date.now() + Number(payload.data.expiresInSeconds || 3600) * 1000
+  };
+  saveSession();
 }
 
 async function renderRoute() {
