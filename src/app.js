@@ -556,23 +556,39 @@ function asDate(value) { if (!value) return null; if (value._seconds) return new
 function compactDuration(ms) { const hours = Math.floor(ms / 3_600_000); const minutes = Math.max(0, Math.floor((ms % 3_600_000) / 60_000)); return `${hours}h ${minutes}m left`; }
 function mergeById(current, incoming, field) { const map = new Map(current.map((item) => [item[field] || item.id, item])); incoming.forEach((item) => map.set(item[field] || item.id, { ...(map.get(item[field] || item.id) || {}), ...item })); return [...map.values()]; }
 function freshWhatsappState() { return { conversations: [], messages: [], templates: [], selectedId: null, overview: null, filter: "ALL", search: "", mode: "TEXT", templateId: null, templateValues: {}, selectedOrderId: null, syncedAt: null, timer: null }; }
-function freshMarketingState() { return { contacts: [], audiences: [], campaigns: [], templates: [] }; }
+function freshMarketingState() {
+  return {
+    contacts: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
+    metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyFilter: "ALL", decision: null
+  };
+}
 
 const ORDER_STATUSES = ["CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION", "READY_TO_DISPATCH", "DISPATCHED", "DELIVERED", "ON_HOLD", "CANCELLED"];
 
 async function renderMarketing() {
   pageTitle.textContent = "Marketing";
-  const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse] = await Promise.all([
+  const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse, repliedResponse, usersResponse, metaTemplatesResponse, configuredTemplatesResponse] = await Promise.all([
     marketingApi("/contacts?limit=100", "Customers"),
     marketingApi("/marketing/audiences?limit=100", "Interested lists"),
-    marketingApi("/marketing/campaigns?limit=100", "Campaigns"),
-    marketingApi("/marketing/templates", "Marketing templates")
+    marketingApi("/campaigns?limit=100", "Campaigns"),
+    marketingApi("/marketing/templates", "Marketing templates"),
+    marketingApi("/marketing/replied?limit=100", "Replied customers"),
+    marketingApi("/users?limit=100", "Sales users"),
+    optionalMarketingApi("/whatsapp/templates?limit=100"),
+    optionalMarketingApi("/whatsapp/templates/configured")
   ]);
   state.marketing = {
     contacts: contactsResponse.data || [],
     audiences: audiencesResponse.data || [],
     campaigns: campaignsResponse.data || [],
-    templates: templatesResponse.data || []
+    templates: templatesResponse.data || [],
+    replied: repliedResponse.data || [],
+    users: usersResponse.data || [],
+    metaTemplates: metaTemplatesResponse.data || [],
+    configuredTemplates: configuredTemplatesResponse.data || [],
+    templateLoadError: metaTemplatesResponse.error || configuredTemplatesResponse.error || null,
+    decision: state.marketing.decision || null,
+    replyFilter: state.marketing.replyFilter || "ALL"
   };
   const stats = aggregateCampaignStats(state.marketing.campaigns);
   const template = state.marketing.templates[0];
@@ -585,6 +601,8 @@ async function renderMarketing() {
       ${miniStat("Orders connected", stats.converted)}
     </div>
     <div class="compliance-banner"><span class="compliance-icon">✓</span><div><strong>Marketing safety is enforced by the backend</strong><p>Only customers with a recorded WhatsApp opt-in are enrolled. A reply pauses the drip, STOP opts the customer out, and a new order marks the campaign converted.</p></div></div>
+    ${renderWhatsAppPolicyTools()}
+    ${renderRepliedProspectsSection()}
     <div class="marketing-grid">
       <section class="panel marketing-audience-panel">
         <div class="panel-title-row"><div><p class="eyebrow">STEP 1</p><h3>Interested customer list</h3><p>Select customers for one reusable audience. Opt-in must be recorded separately and truthfully.</p></div><span class="count-pill">${state.marketing.contacts.length} clients</span></div>
@@ -605,19 +623,18 @@ async function renderMarketing() {
           <label class="field">Campaign name<input name="name" required placeholder="e.g. July catalogue follow-up" /></label>
           <label class="field">Interested list<select name="audienceId" required ${state.marketing.audiences.length ? "" : "disabled"}><option value="">Select a list</option>${state.marketing.audiences.map((audience) => `<option value="${attr(audience.audienceId)}">${esc(audience.name)} (${esc(audience.contactCount || 0)})</option>`).join("")}</select></label>
           <label class="field">What they are interested in<input name="interestLabel" required placeholder="e.g. premium catalogue printing" /></label>
-          <label class="field">Start date & time<input name="startAt" type="datetime-local" value="${attr(datetimeLocalValue(new Date(Date.now() + 5 * 60 * 1000)))}" /></label>
           <div class="drip-steps">
             ${dripStep(1, 0, "Share the latest options and pricing with our team.", true, true)}
             ${dripStep(2, 3, "Would you like us to prepare a quotation for you?", true)}
             ${dripStep(3, 7, "Reply here whenever you are ready and our team will help place the order.", true)}
           </div>
           <label class="campaign-confirm"><input name="confirmConsent" type="checkbox" required /> I confirm that the selected customers have permission to receive this type of WhatsApp marketing message.</label>
-          <button class="button button-primary button-full" type="submit" ${state.marketing.audiences.length && template ? "" : "disabled"}>Create & schedule campaign</button>
-          <p class="muted tiny-note">The worker checks due campaigns every 5 minutes to keep Firebase usage low. Actual delivery timing is controlled by Meta.</p>
+          <button class="button button-primary button-full" type="submit" ${state.marketing.audiences.length && template ? "" : "disabled"}>Save campaign draft</button>
+          <p class="muted tiny-note">After saving, submit the draft for approval. An approved campaign can then be started now or scheduled.</p>
         </form>
       </section>
     </div>
-    <section class="panel campaign-list-panel"><div class="panel-title-row"><div><p class="eyebrow">CAMPAIGN CONTROL</p><h3>Campaigns</h3><p>Pause any active campaign instantly. Replies and orders remain connected to the original campaign.</p></div></div>
+    <section class="panel campaign-list-panel"><div class="panel-title-row"><div><p class="eyebrow">CAMPAIGN CONTROL</p><h3>Campaigns</h3><p>Draft, submit, approve and schedule campaigns with a visible audit-friendly lifecycle.</p></div></div>
       <div class="campaign-list">${state.marketing.campaigns.length ? state.marketing.campaigns.map(campaignCard).join("") : '<div class="empty-state">No campaigns yet. Create your first campaign above.</div>'}</div>
     </section>`;
   bindMarketingEvents();
@@ -629,6 +646,176 @@ async function marketingApi(path, label) {
   } catch (error) {
     throw new Error(`${label} could not load: ${error.message}`);
   }
+}
+
+async function optionalMarketingApi(path) {
+  try {
+    return await api(path);
+  } catch (error) {
+    return { data: [], error: error.message };
+  }
+}
+
+function renderWhatsAppPolicyTools() {
+  const configured = state.marketing.configuredTemplates || [];
+  const remote = state.marketing.metaTemplates || [];
+  const templateRows = configured.map((template) => ({
+    ...template,
+    remote: remote.find((item) => item.name === template.name && String(item.language || "en").toLowerCase() === String(template.language || "en").toLowerCase()) || null
+  }));
+  const approved = templateRows.filter((item) => item.remote?.status === "APPROVED").length;
+  const blocked = templateRows.filter((item) => item.remote && item.remote.status !== "APPROVED").length;
+  const missing = templateRows.filter((item) => !item.remote).length;
+  const decision = state.marketing.decision;
+  const customerOptions = marketingCustomerOptions();
+  return `<section class="panel policy-center-panel">
+    <div class="panel-title-row"><div><p class="eyebrow">WHATSAPP POLICY CENTER</p><h3>Meta template readiness</h3><p>Sync before sending. Only templates marked Approved by Meta can be used outside the customer-service window.</p></div><button type="button" class="button button-secondary" id="sync-meta-templates">Sync from Meta</button></div>
+    ${state.marketing.templateLoadError ? `<div class="form-error policy-error">Template status unavailable: ${esc(state.marketing.templateLoadError)}</div>` : ""}
+    <div class="template-summary"><span class="template-count approved"><strong>${approved}</strong> Approved</span><span class="template-count review"><strong>${blocked}</strong> In review / blocked</span><span class="template-count missing"><strong>${missing}</strong> Not synced</span><span class="template-count remote"><strong>${remote.length}</strong> Meta templates</span></div>
+    <details class="template-registry"><summary>View configured template status (${templateRows.length})</summary><div class="template-status-grid">${templateRows.length ? templateRows.map(templateStatusCard).join("") : '<div class="empty-state">Backend template registry is unavailable.</div>'}</div></details>
+  </section>
+  <div class="policy-tools-grid">
+    <section class="panel policy-tool-panel">
+      <div><p class="eyebrow">SEND SAFETY CHECK</p><h3>Preview the allowed send mode</h3><p>Check whether a message will use the 24-hour service window, a utility template, a marketing template, or be blocked.</p></div>
+      <form id="message-decision-form" class="policy-form">
+        <label class="field">Customer<select name="contactId" required>${customerOptions}</select></label>
+        <div class="form-grid policy-form-grid"><label class="field">Event<select name="eventType">${messageEventOptions()}</select></label><label class="field">Template<select name="templateKey"><option value="">Auto select</option>${configured.map((item) => `<option value="${attr(item.key)}">${esc(item.key)} · ${esc(item.category)}</option>`).join("")}</select></label></div>
+        <div class="form-grid policy-form-grid"><label class="field">Order ID<input name="orderId" placeholder="Real Firestore order ID" /></label><label class="field">Quotation ID<input name="quotationId" placeholder="Real quotation ID" /></label></div>
+        <label class="field">Message intent<input name="messageIntent" maxlength="500" placeholder="Why this message should be sent" /></label>
+        <label class="campaign-confirm"><input type="checkbox" name="isPromotional" /> This message contains a promotion</label>
+        <button type="submit" class="button button-secondary button-full">Check send mode</button>
+      </form>
+      ${decision ? renderDecisionResult(decision) : '<p class="muted policy-helper">No message is sent by this check.</p>'}
+    </section>
+    <section class="panel policy-tool-panel">
+      <div><p class="eyebrow">TRANSACTIONAL UPDATE</p><h3>Send an order utility message</h3><p>Use a real quotation or order reference. The backend verifies it before queueing the WhatsApp message.</p></div>
+      <form id="utility-event-form" class="policy-form">
+        <label class="field">Customer<select name="contactId" required>${customerOptions}</select></label>
+        <label class="field">Update type<select name="eventType" id="utility-event-type"><option value="QUOTATION_READY">Quotation ready</option><option value="DESIGN_PROOF_READY">Design proof ready</option><option value="DESIGN_APPROVAL_PENDING">Design approval pending</option><option value="PAYMENT_RECEIVED">Payment received</option><option value="ORDER_DISPATCHED">Order dispatched</option></select></label>
+        <div id="utility-event-fields">${utilityEventFields("QUOTATION_READY")}</div>
+        <button type="submit" class="button button-primary button-full">Verify & queue message</button>
+      </form>
+    </section>
+  </div>`;
+}
+
+function templateStatusCard(template) {
+  const status = template.remote?.status || "NOT_SYNCED";
+  return `<article class="template-status-card"><div><strong>${esc(template.name)}</strong><small>${esc(template.key)} · ${esc(template.language)} · ${esc(template.category)}</small></div><span class="template-status status-${attr(status.toLowerCase())}">${esc(pretty(status))}</span>${template.remote?.rejectedReason ? `<p>${esc(template.remote.rejectedReason)}</p>` : ""}</article>`;
+}
+
+function marketingCustomerOptions() {
+  const contacts = state.marketing.contacts || [];
+  return `<option value="">Select customer</option>${contacts.map((contact) => `<option value="${attr(contact.contactId)}">${esc(contact.companyName || contact.contactPerson || contact.primaryPhone || contact.contactId)}</option>`).join("")}`;
+}
+
+function messageEventOptions() {
+  return ["QUOTATION_READY", "DESIGN_PROOF_READY", "DESIGN_APPROVAL_PENDING", "PAYMENT_RECEIVED", "PAYMENT_DUE", "ORDER_READY", "ORDER_DISPATCHED", "TRACKING_UPDATED", "DELIVERY_UPDATED", "LEAD_REENGAGEMENT", "CAMPAIGN_MESSAGE", "CUSTOMER_REQUEST"]
+    .map((eventType) => `<option value="${eventType}">${esc(pretty(eventType))}</option>`).join("");
+}
+
+function renderDecisionResult(decision) {
+  const mode = decision.mode || "DO_NOT_SEND";
+  return `<div class="decision-result ${decision.allowed ? "allowed" : "blocked"}"><div><span>${esc(pretty(mode))}</span><strong>${decision.allowed ? "Allowed" : "Blocked"}</strong></div><p>${esc(decision.reason || "Policy decision completed")}</p><small>Service window: ${decision.serviceWindowOpen ? "Open" : "Closed"} · Transaction: ${decision.transactionVerified ? "Verified" : "Not verified"}</small></div>`;
+}
+
+function utilityEventFields(eventType) {
+  const commonName = '<label class="field">Customer name<input name="customerName" placeholder="Name used in the template" /></label>';
+  if (eventType === "QUOTATION_READY") return `${commonName}<label class="field">Quotation ID<input name="quotationId" required placeholder="Real quotation ID" /></label><div class="form-grid policy-form-grid"><label class="field">Product<input name="product" required /></label><label class="field">Amount<input name="amount" type="number" min="0" step="0.01" required /></label></div><label class="field">Quotation URL<input name="quotationUrl" type="url" required placeholder="https://..." /></label>`;
+  if (["DESIGN_PROOF_READY", "DESIGN_APPROVAL_PENDING"].includes(eventType)) return `${commonName}<label class="field">Order ID<input name="orderId" required placeholder="Real order ID" /></label><label class="field">Proof URL<input name="proofUrl" type="url" required placeholder="https://..." /></label>`;
+  if (eventType === "PAYMENT_RECEIVED") return `${commonName}<div class="form-grid policy-form-grid"><label class="field">Order ID<input name="orderId" required placeholder="Real order ID" /></label><label class="field">Amount received<input name="amount" type="number" min="0" step="0.01" required /></label></div>`;
+  return `${commonName}<label class="field">Order ID<input name="orderId" required placeholder="Real order ID" /></label><div class="form-grid policy-form-grid"><label class="field">Courier name<input name="courierName" required /></label><label class="field">Tracking number<input name="trackingNumber" required /></label></div><label class="field">Tracking URL (optional)<input name="trackingUrl" type="url" placeholder="https://..." /></label>`;
+}
+
+function renderRepliedProspectsSection() {
+  const replied = state.marketing.replied || [];
+  const filter = state.marketing.replyFilter || "ALL";
+  const counts = {
+    ALL: replied.length,
+    IMPORTANT: replied.filter((item) => item.important).length,
+    HOT: replied.filter((item) => item.aiTemperature === "HOT").length,
+    WARM: replied.filter((item) => item.aiTemperature === "WARM").length,
+    COLD: replied.filter((item) => item.aiTemperature === "COLD").length,
+    REPEAT: replied.filter((item) => item.repeatMarketing && !item.suppressed).length
+  };
+  const visible = replied.filter((item) => {
+    if (filter === "IMPORTANT") return item.important;
+    if (filter === "REPEAT") return item.repeatMarketing && !item.suppressed;
+    if (["HOT", "WARM", "COLD"].includes(filter)) return item.aiTemperature === filter;
+    return true;
+  });
+  return `<section class="panel marketing-replies-panel" id="marketing-replies-panel">
+    <div class="panel-title-row"><div><p class="eyebrow">REPLIED INTERESTED CUSTOMERS</p><h3>AI priority inbox</h3><p>Campaign replies are separated here. AI assigns Hot, Warm or Cold; your team controls importance, ownership and repeat-marketing eligibility.</p></div><button class="button button-secondary" id="select-repeat-marketing" type="button" ${counts.REPEAT ? "" : "disabled"}>Select repeat list (${counts.REPEAT})</button></div>
+    <div class="reply-filter-bar">${["ALL", "IMPORTANT", "HOT", "WARM", "COLD", "REPEAT"].map((item) => `<button type="button" class="reply-filter ${filter === item ? "active" : ""}" data-reply-filter="${item}">${pretty(item)} <span>${counts[item]}</span></button>`).join("")}</div>
+    <div class="reply-prospect-list">${visible.length ? visible.map(repliedProspectCard).join("") : '<div class="empty-state">No replied customers in this section yet.</div>'}</div>
+    <p class="muted tiny-note reply-safety-note">Repeat marketing only makes the customer selectable for a future campaign. It never sends automatically, and an opt-out always overrides this setting.</p>
+  </section>`;
+}
+
+function repliedProspectCard(prospect) {
+  const name = prospect.companyName || prospect.contactPerson || "Unnamed customer";
+  const temperature = prospect.aiTemperature || "WARM";
+  const confidence = Math.round(Number(prospect.aiConfidence || 0) * 100);
+  const source = prospect.classificationSource === "AI" ? `AI ${confidence}%` : "Needs AI review";
+  const assignedUsers = (state.marketing.users || []).filter((user) => user.active !== false && ["OWNER", "ADMIN", "SALES_MANAGER", "SALES"].includes(user.role));
+  return `<article class="reply-prospect-card ${prospect.important ? "important" : ""}">
+    <div class="reply-prospect-main"><div class="reply-prospect-identity"><span class="party-avatar">${esc(initials(name))}</span><div><strong>${esc(name)}</strong><small>${esc(prospect.primaryPhone || "No phone")} · ${esc(prospect.city || "City not set")} · ${esc(date(prospect.lastReplyAt))}</small></div></div><div class="reply-badges">${prospect.important ? '<span class="reply-badge important">Important</span>' : ""}<span class="reply-badge temp-${attr(temperature.toLowerCase())}">${esc(temperature)}</span><span class="reply-badge ai-source">${esc(source)}</span>${prospect.repeatMarketing ? '<span class="reply-badge repeat">Repeat</span>' : ""}${prospect.suppressed ? '<span class="reply-badge suppressed">Opted out</span>' : ""}</div></div>
+    <blockquote>${esc(prospect.lastReplyText || "Customer replied to the campaign")}</blockquote>
+    <p class="reply-ai-reason">${esc(prospect.aiReason || "Waiting for AI classification")}</p>
+    <div class="reply-prospect-actions">
+      <label>Assigned to<select class="reply-assignee" data-replied-contact="${attr(prospect.contactId)}"><option value="">Unassigned</option>${assignedUsers.map((user) => `<option value="${attr(user.userId)}" ${prospect.assignedTo === user.userId ? "selected" : ""}>${esc(user.name || user.email || user.userId)}</option>`).join("")}</select></label>
+      <button type="button" class="button button-secondary reply-setting" data-replied-contact="${attr(prospect.contactId)}" data-reply-setting="important" data-reply-value="${prospect.important ? "false" : "true"}">${prospect.important ? "Remove Important" : "Mark Important"}</button>
+      <button type="button" class="button button-secondary reply-setting" data-replied-contact="${attr(prospect.contactId)}" data-reply-setting="repeatMarketing" data-reply-value="${prospect.repeatMarketing ? "false" : "true"}" ${prospect.suppressed ? "disabled" : ""}>${prospect.repeatMarketing ? "Remove Repeat" : "Add to Repeat"}</button>
+      ${prospect.conversationId ? `<a class="button button-primary" href="#whatsapp/${attr(prospect.conversationId)}">Open chat</a>` : ""}
+    </div>
+  </article>`;
+}
+
+function refreshRepliedProspectsSection() {
+  const current = document.querySelector("#marketing-replies-panel");
+  if (!current) return;
+  current.outerHTML = renderRepliedProspectsSection();
+  bindRepliedProspectEvents();
+}
+
+function bindRepliedProspectEvents() {
+  document.querySelectorAll("[data-reply-filter]").forEach((button) => button.addEventListener("click", () => {
+    state.marketing.replyFilter = button.dataset.replyFilter;
+    refreshRepliedProspectsSection();
+  }));
+  document.querySelectorAll(".reply-setting").forEach((button) => button.addEventListener("click", () => {
+    updateRepliedProspect(button.dataset.repliedContact, { [button.dataset.replySetting]: button.dataset.replyValue === "true" }, button);
+  }));
+  document.querySelectorAll(".reply-assignee").forEach((select) => select.addEventListener("change", () => {
+    updateRepliedProspect(select.dataset.repliedContact, { assignedTo: select.value || null }, select);
+  }));
+  document.querySelector("#select-repeat-marketing")?.addEventListener("click", selectRepeatMarketingCustomers);
+}
+
+async function updateRepliedProspect(contactId, patch, control) {
+  control.disabled = true;
+  try {
+    const { data } = await api(`/marketing/replied/${encodeURIComponent(contactId)}`, { method: "PATCH", body: patch });
+    state.marketing.replied = state.marketing.replied.map((item) => item.contactId === contactId ? { ...item, ...data } : item);
+    notify("Replied customer settings updated.");
+    refreshRepliedProspectsSection();
+  } catch (error) {
+    notify(error.message, true);
+    control.disabled = false;
+  }
+}
+
+function selectRepeatMarketingCustomers() {
+  const selectedIds = new Set(state.marketing.replied.filter((item) => item.repeatMarketing && !item.suppressed).map((item) => item.contactId));
+  let selected = 0;
+  document.querySelectorAll("[data-audience-contact]").forEach((checkbox) => {
+    checkbox.checked = selectedIds.has(checkbox.value);
+    if (checkbox.checked) selected += 1;
+  });
+  const label = document.querySelector("#audience-selection-count");
+  if (label) label.textContent = `${selected} selected`;
+  document.querySelector("#audience-form")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  notify(selected ? `${selected} repeat-marketing customer(s) selected.` : "Repeat customers are not in the currently loaded customer page.", !selected);
 }
 
 function marketingCustomerRow(contact) {
@@ -643,9 +830,22 @@ function dripStep(position, delayDays, messageLine, enabled, locked = false) {
 }
 
 function campaignCard(campaign) {
-  const stats = { total: 0, eligible: 0, active: 0, sent: 0, replied: 0, converted: 0, suppressed: 0, ...(campaign.stats || {}) };
-  const action = campaign.status === "ACTIVE" ? "pause" : campaign.status === "PAUSED" ? "resume" : campaign.status === "DRAFT" ? "launch" : null;
-  return `<article class="campaign-card"><div class="campaign-main"><div><span class="status-dot status-${attr(String(campaign.status || "draft").toLowerCase())}"></span><strong>${esc(campaign.name)}</strong><small>${esc(campaign.audienceName || "Audience")} · ${esc(campaign.steps?.length || 0)} step${campaign.steps?.length === 1 ? "" : "s"} · ${esc(pretty(campaign.status))}</small></div>${action ? `<button class="button button-secondary campaign-action" data-campaign-action="${action}" data-campaign-id="${attr(campaign.campaignId)}">${action === "pause" ? "Pause" : action === "resume" ? "Resume" : "Launch now"}</button>` : ""}</div><div class="campaign-stats"><span><strong>${stats.eligible}</strong> enrolled</span><span><strong>${stats.sent}</strong> queued</span><span><strong>${stats.replied}</strong> replied</span><span><strong>${stats.converted}</strong> orders</span><span><strong>${stats.suppressed}</strong> skipped</span></div></article>`;
+  const stats = { total: 0, eligible: 0, active: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, replied: 0, converted: 0, suppressed: 0, ...(campaign.stats || {}) };
+  return `<article class="campaign-card"><div class="campaign-main"><div><span class="status-dot status-${attr(String(campaign.status || "draft").toLowerCase())}"></span><strong>${esc(campaign.name)}</strong><small>${esc(campaign.audienceName || "Audience")} · ${esc(campaign.steps?.length || 0)} step${campaign.steps?.length === 1 ? "" : "s"} · ${esc(pretty(campaign.status))}${campaign.startAt ? ` · ${esc(dateTime(campaign.startAt))}` : ""}</small></div><div class="campaign-actions">${campaignActionButtons(campaign)}</div></div><div class="campaign-stats"><span><strong>${stats.eligible}</strong> enrolled</span><span><strong>${stats.sent}</strong> sent</span><span><strong>${stats.delivered}</strong> delivered</span><span><strong>${stats.read}</strong> read</span><span><strong>${stats.replied}</strong> replied</span><span><strong>${stats.converted}</strong> orders</span><span><strong>${stats.failed}</strong> failed</span><span><strong>${Math.max(stats.skipped, stats.suppressed)}</strong> skipped</span></div></article>`;
+}
+
+function campaignActionButtons(campaign) {
+  const id = attr(campaign.campaignId);
+  const button = (action, label, primary = false) => `<button class="button ${primary ? "button-primary" : "button-secondary"} campaign-action" data-campaign-action="${action}" data-campaign-id="${id}">${label}</button>`;
+  const actions = [button("details", "Details")];
+  if (campaign.status === "DRAFT") actions.push(button("submit", "Submit", true));
+  if (campaign.status === "PENDING_APPROVAL") actions.push(button("approve", "Approve", true));
+  if (campaign.status === "APPROVED") actions.push(button("schedule", "Schedule"), button("start", "Start now", true));
+  if (campaign.status === "SCHEDULED") actions.push(button("start", "Start now", true));
+  if (campaign.status === "ACTIVE") actions.push(button("pause", "Pause"));
+  if (campaign.status === "PAUSED") actions.push(button("resume", "Resume", true));
+  if (!["COMPLETED", "CANCELLED", "FAILED"].includes(campaign.status)) actions.push(button("cancel", "Cancel"));
+  return actions.join("");
 }
 
 function bindMarketingEvents() {
@@ -670,6 +870,13 @@ function bindMarketingEvents() {
   document.querySelector("#audience-form")?.addEventListener("submit", createMarketingAudience);
   document.querySelector("#campaign-form")?.addEventListener("submit", createMarketingCampaign);
   document.querySelectorAll(".campaign-action").forEach((button) => button.addEventListener("click", () => changeCampaignState(button)));
+  document.querySelector("#sync-meta-templates")?.addEventListener("click", syncMetaTemplates);
+  document.querySelector("#message-decision-form")?.addEventListener("submit", checkMessageDecision);
+  document.querySelector("#utility-event-type")?.addEventListener("change", (event) => {
+    document.querySelector("#utility-event-fields").innerHTML = utilityEventFields(event.target.value);
+  });
+  document.querySelector("#utility-event-form")?.addEventListener("submit", sendUtilityEvent);
+  bindRepliedProspectEvents();
 }
 
 async function recordMarketingConsent(button) {
@@ -717,20 +924,18 @@ async function createMarketingCampaign(event) {
     delayDays: Number(values[`step${position}Delay`] || 0),
     messageLine: values[`step${position}Message`]
   }));
-  if (!confirm(`Schedule this ${steps.length}-step Marketing campaign? Only recorded opt-ins will be enrolled.`)) return;
+  if (!confirm(`Save this ${steps.length}-step marketing campaign as a draft? Only recorded opt-ins can be enrolled later.`)) return;
   const button = event.submitter;
   button.disabled = true;
   try {
-    const { data: campaign } = await api("/marketing/campaigns", { method: "POST", body: {
+    await api("/campaigns", { method: "POST", body: {
       name: values.name,
       audienceId: values.audienceId,
       interestLabel: values.interestLabel,
       templateId: state.marketing.templates[0]?.id || "interest_followup",
       steps
     } });
-    const startAt = values.startAt ? new Date(values.startAt).toISOString() : undefined;
-    await api(`/marketing/campaigns/${encodeURIComponent(campaign.campaignId)}/launch`, { method: "POST", body: startAt ? { startAt } : {} });
-    notify("Campaign scheduled. The first due message will be queued within 5 minutes.");
+    notify("Campaign draft saved. Submit it when it is ready for approval.");
     await renderMarketing();
   } catch (error) {
     notify(error.message, true);
@@ -740,14 +945,116 @@ async function createMarketingCampaign(event) {
 
 async function changeCampaignState(button) {
   const action = button.dataset.campaignAction;
-  if (action === "launch" && !confirm("Launch this draft now? Only contacts with recorded opt-in will receive it.")) return;
+  if (action === "details") return showCampaignDetails(button.dataset.campaignId, button);
+  if (action === "cancel" && !confirm("Cancel this campaign? Pending messages will stop.")) return;
+  if (action === "start" && !confirm("Start this approved campaign now? Only eligible opted-in customers will be enrolled.")) return;
+  let body = {};
+  if (action === "schedule") {
+    const answer = prompt("Campaign start date/time (example: 2026-07-25 10:30)", datetimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)).replace("T", " "));
+    if (!answer) return;
+    const parsed = new Date(answer.replace(" ", "T"));
+    if (Number.isNaN(parsed.getTime()) || parsed.getTime() <= Date.now()) return notify("Choose a valid future date and time.", true);
+    body = { startAt: parsed.toISOString() };
+  }
   button.disabled = true;
   try {
-    await api(`/marketing/campaigns/${encodeURIComponent(button.dataset.campaignId)}/${action}`, { method: "POST", body: {} });
-    notify(`Campaign ${action === "pause" ? "paused" : action === "resume" ? "resumed" : "launched"}.`);
+    await api(`/campaigns/${encodeURIComponent(button.dataset.campaignId)}/${action}`, { method: "POST", body });
+    const messages = { submit: "submitted for approval", approve: "approved", schedule: "scheduled", start: "started", pause: "paused", resume: "resumed", cancel: "cancelled" };
+    notify(`Campaign ${messages[action] || "updated"}.`);
     await renderMarketing();
   } catch (error) {
     notify(error.message, true);
+    button.disabled = false;
+  }
+}
+
+async function syncMetaTemplates(event) {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Syncing…";
+  try {
+    const { data } = await api("/whatsapp/templates/sync", { method: "POST", body: {} });
+    notify(`${data.synced || 0} Meta template(s) synced.`);
+    await renderMarketing();
+  } catch (error) {
+    notify(error.message, true);
+    button.disabled = false;
+    button.textContent = "Sync from Meta";
+  }
+}
+
+async function checkMessageDecision(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form));
+  const payload = {
+    contactId: values.contactId,
+    eventType: values.eventType,
+    messageIntent: values.messageIntent || "CRM policy preview",
+    isPromotional: values.isPromotional === "on",
+    requestedByCustomer: values.eventType === "CUSTOMER_REQUEST",
+    templateData: {}
+  };
+  for (const key of ["templateKey", "orderId", "quotationId"]) if (values[key]) payload[key] = values[key];
+  const button = event.submitter;
+  button.disabled = true;
+  try {
+    const { data } = await api("/message/decide", { method: "POST", body: payload });
+    state.marketing.decision = data;
+    const existing = form.parentElement.querySelector(".decision-result, .policy-helper");
+    if (existing) existing.outerHTML = renderDecisionResult(data);
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function sendUtilityEvent(event) {
+  event.preventDefault();
+  const values = Object.fromEntries(new FormData(event.currentTarget));
+  const type = values.eventType;
+  const endpoint = ({
+    QUOTATION_READY: "quotation-ready",
+    DESIGN_PROOF_READY: "design-proof-ready",
+    DESIGN_APPROVAL_PENDING: "design-approval-pending",
+    PAYMENT_RECEIVED: "payment-received",
+    ORDER_DISPATCHED: "order-dispatched"
+  })[type];
+  if (!endpoint) return notify("Select a supported update type.", true);
+  delete values.eventType;
+  Object.keys(values).forEach((key) => { if (values[key] === "") delete values[key]; });
+  if (!confirm(`Verify the transaction and queue this ${pretty(type)} WhatsApp update?`)) return;
+  const button = event.submitter;
+  button.disabled = true;
+  try {
+    const { data } = await api(`/events/${endpoint}`, { method: "POST", body: values });
+    notify(data.mode ? `Message ${data.queued ? "queued" : "checked"} using ${pretty(data.mode)}${data.reason ? `: ${pretty(data.reason)}` : ""}.` : "Utility message verified and queued.");
+    event.currentTarget.reset();
+    document.querySelector("#utility-event-fields").innerHTML = utilityEventFields("QUOTATION_READY");
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function showCampaignDetails(campaignId, button) {
+  button.disabled = true;
+  try {
+    const { data: campaign } = await api(`/campaigns/${encodeURIComponent(campaignId)}`);
+    const enrollments = campaign.enrollments || [];
+    const skipped = enrollments.filter((item) => item.suppressionReason || item.failureReason || ["SUPPRESSED", "FAILED", "SKIPPED"].includes(item.status));
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    backdrop.innerHTML = `<div class="modal campaign-detail-modal"><div class="modal-head"><div><p class="eyebrow">CAMPAIGN DETAIL</p><h3>${esc(campaign.name)}</h3></div><button class="modal-close" type="button" aria-label="Close">×</button></div><div class="campaign-detail-meta"><span>Status <strong>${esc(pretty(campaign.status))}</strong></span><span>Audience <strong>${esc(campaign.audienceName || "—")}</strong></span><span>Start <strong>${esc(dateTime(campaign.startAt))}</strong></span></div><h4>Skipped / failed recipients</h4>${skipped.length ? `<div class="campaign-recipient-list">${skipped.map((item) => `<div><strong>${esc(item.contactId)}</strong><span>${esc(pretty(item.suppressionReason || item.failureReason || item.status))}</span></div>`).join("")}</div>` : '<div class="empty-state">No skipped or failed recipient recorded.</div>'}<p class="muted tiny-note">${enrollments.length} total enrollment record(s).</p></div>`;
+    document.body.append(backdrop);
+    const close = () => backdrop.remove();
+    backdrop.querySelector(".modal-close").addEventListener("click", close);
+    backdrop.addEventListener("click", (event) => { if (event.target === backdrop) close(); });
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
     button.disabled = false;
   }
 }
@@ -963,6 +1270,11 @@ function date(value) {
   if (!value) return "—";
   const parsed = value?._seconds ? new Date(value._seconds * 1000) : new Date(value);
   return Number.isNaN(parsed.getTime()) ? "—" : new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(parsed);
+}
+function dateTime(value) {
+  if (!value) return "—";
+  const parsed = value?._seconds ? new Date(value._seconds * 1000) : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? "—" : new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }).format(parsed);
 }
 function pretty(value) { return String(value || "").replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase()); }
 function initials(value) { return String(value || "RX").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase(); }
