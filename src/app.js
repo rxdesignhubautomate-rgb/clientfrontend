@@ -563,10 +563,10 @@ const ORDER_STATUSES = ["CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION
 async function renderMarketing() {
   pageTitle.textContent = "Marketing";
   const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse] = await Promise.all([
-    api("/contacts?limit=100"),
-    api("/marketing/audiences?limit=100"),
-    api("/marketing/campaigns?limit=100"),
-    api("/marketing/templates")
+    marketingApi("/contacts?limit=100", "Customers"),
+    marketingApi("/marketing/audiences?limit=100", "Interested lists"),
+    marketingApi("/marketing/campaigns?limit=100", "Campaigns"),
+    marketingApi("/marketing/templates", "Marketing templates")
   ]);
   state.marketing = {
     contacts: contactsResponse.data || [],
@@ -621,6 +621,14 @@ async function renderMarketing() {
       <div class="campaign-list">${state.marketing.campaigns.length ? state.marketing.campaigns.map(campaignCard).join("") : '<div class="empty-state">No campaigns yet. Create your first campaign above.</div>'}</div>
     </section>`;
   bindMarketingEvents();
+}
+
+async function marketingApi(path, label) {
+  try {
+    return await api(path);
+  } catch (error) {
+    throw new Error(`${label} could not load: ${error.message}`);
+  }
 }
 
 function marketingCustomerRow(contact) {
