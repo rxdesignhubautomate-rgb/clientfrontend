@@ -559,7 +559,8 @@ function freshWhatsappState() { return { conversations: [], messages: [], templa
 function freshMarketingState() {
   return {
     contacts: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
-    metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyFilter: "ALL", decision: null
+    metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyLoadError: null,
+    strictCampaignLifecycle: false, replyFilter: "ALL", decision: null
   };
 }
 
@@ -570,9 +571,9 @@ async function renderMarketing() {
   const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse, repliedResponse, usersResponse, metaTemplatesResponse, configuredTemplatesResponse] = await Promise.all([
     marketingApi("/contacts?limit=100", "Customers"),
     marketingApi("/marketing/audiences?limit=100", "Interested lists"),
-    marketingApi("/campaigns?limit=100", "Campaigns"),
+    firstAvailableMarketingApi(["/campaigns?limit=100", "/marketing/campaigns?limit=100"], "Campaigns"),
     marketingApi("/marketing/templates", "Marketing templates"),
-    marketingApi("/marketing/replied?limit=100", "Replied customers"),
+    optionalMarketingApi("/marketing/replied?limit=100"),
     marketingApi("/users?limit=100", "Sales users"),
     optionalMarketingApi("/whatsapp/templates?limit=100"),
     optionalMarketingApi("/whatsapp/templates/configured")
@@ -587,6 +588,8 @@ async function renderMarketing() {
     metaTemplates: metaTemplatesResponse.data || [],
     configuredTemplates: configuredTemplatesResponse.data || [],
     templateLoadError: metaTemplatesResponse.error || configuredTemplatesResponse.error || null,
+    replyLoadError: repliedResponse.error || null,
+    strictCampaignLifecycle: campaignsResponse.route?.startsWith("/campaigns") === true,
     decision: state.marketing.decision || null,
     replyFilter: state.marketing.replyFilter || "ALL"
   };
@@ -656,7 +659,22 @@ async function optionalMarketingApi(path) {
   }
 }
 
+async function firstAvailableMarketingApi(paths, label) {
+  let lastError = null;
+  for (const path of paths) {
+    try {
+      return { ...(await api(path)), route: path };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw new Error(`${label} could not load: ${lastError?.message || "Route not found"}`);
+}
+
 function renderWhatsAppPolicyTools() {
+  if (!state.marketing.strictCampaignLifecycle) {
+    return `<section class="panel policy-center-panel compatibility-panel"><div class="panel-title-row"><div><p class="eyebrow">BACKEND UPDATE REQUIRED</p><h3>Marketing is running in compatibility mode</h3><p>The deployed Render backend does not have the new smart-policy routes yet. Existing audiences and campaigns remain usable; Meta sync, send-mode preview and approval workflow will appear automatically after backend v7 is deployed.</p></div><span class="count-pill">Legacy backend</span></div></section>`;
+  }
   const configured = state.marketing.configuredTemplates || [];
   const remote = state.marketing.metaTemplates || [];
   const templateRows = configured.map((template) => ({
@@ -746,6 +764,7 @@ function renderRepliedProspectsSection() {
   });
   return `<section class="panel marketing-replies-panel" id="marketing-replies-panel">
     <div class="panel-title-row"><div><p class="eyebrow">REPLIED INTERESTED CUSTOMERS</p><h3>AI priority inbox</h3><p>Campaign replies are separated here. AI assigns Hot, Warm or Cold; your team controls importance, ownership and repeat-marketing eligibility.</p></div><button class="button button-secondary" id="select-repeat-marketing" type="button" ${counts.REPEAT ? "" : "disabled"}>Select repeat list (${counts.REPEAT})</button></div>
+    ${state.marketing.replyLoadError ? `<div class="compatibility-note">Replied-customer classification will appear after the backend update. The rest of Marketing remains available.</div>` : ""}
     <div class="reply-filter-bar">${["ALL", "IMPORTANT", "HOT", "WARM", "COLD", "REPEAT"].map((item) => `<button type="button" class="reply-filter ${filter === item ? "active" : ""}" data-reply-filter="${item}">${pretty(item)} <span>${counts[item]}</span></button>`).join("")}</div>
     <div class="reply-prospect-list">${visible.length ? visible.map(repliedProspectCard).join("") : '<div class="empty-state">No replied customers in this section yet.</div>'}</div>
     <p class="muted tiny-note reply-safety-note">Repeat marketing only makes the customer selectable for a future campaign. It never sends automatically, and an opt-out always overrides this setting.</p>
@@ -837,6 +856,13 @@ function campaignCard(campaign) {
 function campaignActionButtons(campaign) {
   const id = attr(campaign.campaignId);
   const button = (action, label, primary = false) => `<button class="button ${primary ? "button-primary" : "button-secondary"} campaign-action" data-campaign-action="${action}" data-campaign-id="${id}">${label}</button>`;
+  if (!state.marketing.strictCampaignLifecycle) {
+    const legacyActions = [button("details", "Details")];
+    if (campaign.status === "DRAFT") legacyActions.push(button("launch", "Launch now", true));
+    if (campaign.status === "ACTIVE") legacyActions.push(button("pause", "Pause"));
+    if (campaign.status === "PAUSED") legacyActions.push(button("resume", "Resume", true));
+    return legacyActions.join("");
+  }
   const actions = [button("details", "Details")];
   if (campaign.status === "DRAFT") actions.push(button("submit", "Submit", true));
   if (campaign.status === "PENDING_APPROVAL") actions.push(button("approve", "Approve", true));
@@ -928,7 +954,8 @@ async function createMarketingCampaign(event) {
   const button = event.submitter;
   button.disabled = true;
   try {
-    await api("/campaigns", { method: "POST", body: {
+    const campaignBase = state.marketing.strictCampaignLifecycle ? "/campaigns" : "/marketing/campaigns";
+    await api(campaignBase, { method: "POST", body: {
       name: values.name,
       audienceId: values.audienceId,
       interestLabel: values.interestLabel,
@@ -946,6 +973,7 @@ async function createMarketingCampaign(event) {
 async function changeCampaignState(button) {
   const action = button.dataset.campaignAction;
   if (action === "details") return showCampaignDetails(button.dataset.campaignId, button);
+  if (action === "launch" && !confirm("Launch this draft now? Only contacts with recorded opt-in will receive it.")) return;
   if (action === "cancel" && !confirm("Cancel this campaign? Pending messages will stop.")) return;
   if (action === "start" && !confirm("Start this approved campaign now? Only eligible opted-in customers will be enrolled.")) return;
   let body = {};
@@ -958,8 +986,9 @@ async function changeCampaignState(button) {
   }
   button.disabled = true;
   try {
-    await api(`/campaigns/${encodeURIComponent(button.dataset.campaignId)}/${action}`, { method: "POST", body });
-    const messages = { submit: "submitted for approval", approve: "approved", schedule: "scheduled", start: "started", pause: "paused", resume: "resumed", cancel: "cancelled" };
+    const campaignBase = state.marketing.strictCampaignLifecycle ? "/campaigns" : "/marketing/campaigns";
+    await api(`${campaignBase}/${encodeURIComponent(button.dataset.campaignId)}/${action}`, { method: "POST", body });
+    const messages = { launch: "launched", submit: "submitted for approval", approve: "approved", schedule: "scheduled", start: "started", pause: "paused", resume: "resumed", cancel: "cancelled" };
     notify(`Campaign ${messages[action] || "updated"}.`);
     await renderMarketing();
   } catch (error) {
@@ -1042,7 +1071,8 @@ async function sendUtilityEvent(event) {
 async function showCampaignDetails(campaignId, button) {
   button.disabled = true;
   try {
-    const { data: campaign } = await api(`/campaigns/${encodeURIComponent(campaignId)}`);
+    const campaignBase = state.marketing.strictCampaignLifecycle ? "/campaigns" : "/marketing/campaigns";
+    const { data: campaign } = await api(`${campaignBase}/${encodeURIComponent(campaignId)}`);
     const enrollments = campaign.enrollments || [];
     const skipped = enrollments.filter((item) => item.suppressionReason || item.failureReason || ["SUPPRESSED", "FAILED", "SKIPPED"].includes(item.status));
     const backdrop = document.createElement("div");

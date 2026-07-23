@@ -248,6 +248,8 @@ tbody tr { cursor: pointer; transition: background .15s; } tbody tr:hover { back
 .compliance-icon { display: grid; flex: 0 0 28px; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: white; background: #28aa89; font-weight: 900; }
 .compliance-banner strong { font-size: 13px; }.compliance-banner p { margin: 4px 0 0; color: #5f8178; font-size: 12px; line-height: 1.5; }
 .policy-center-panel { margin-bottom: 18px; }
+.compatibility-panel { border-color: #ead9ad; background: #fffaf0; }.compatibility-panel h3 { color: #59451b; }.compatibility-panel .panel-title-row p:not(.eyebrow) { max-width: 780px; color: #7e6b40; }
+.compatibility-note { margin-top: 14px; padding: 10px 12px; border-radius: 10px; color: #796230; background: #fff5dc; font-size: 10px; line-height: 1.45; }
 .policy-error { margin-top: 14px; }
 .template-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; margin-top: 17px; }
 .template-count { padding: 11px 12px; border-radius: 11px; color: #66748a; background: #f4f6fa; font-size: 9px; font-weight: 800; text-transform: uppercase; }

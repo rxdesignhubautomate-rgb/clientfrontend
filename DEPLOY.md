@@ -9,3 +9,5 @@
 The campaign workflow is: **Draft → Submit → Approve → Schedule/Start**.
 
 Only Meta templates with an **Approved** status can be used for template sends. Transactional update forms require real Firestore order or quotation IDs linked to the selected customer.
+
+If an older backend is temporarily deployed, the frontend automatically uses legacy campaign routes and keeps the Marketing page available. Advanced policy controls activate after backend v7 is live.
