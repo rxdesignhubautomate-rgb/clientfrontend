@@ -559,7 +559,7 @@ function freshWhatsappState() { return { conversations: [], messages: [], templa
 function freshMarketingState() {
   return {
     contacts: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
-    metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyLoadError: null,
+    metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyLoadError: null, userLoadError: null,
     strictCampaignLifecycle: false, replyFilter: "ALL", decision: null
   };
 }
@@ -574,7 +574,7 @@ async function renderMarketing() {
     firstAvailableMarketingApi(["/campaigns?limit=100", "/marketing/campaigns?limit=100"], "Campaigns"),
     marketingApi("/marketing/templates", "Marketing templates"),
     optionalMarketingApi("/marketing/replied?limit=100"),
-    marketingApi("/users?limit=100", "Sales users"),
+    optionalMarketingApi("/users?limit=100"),
     optionalMarketingApi("/whatsapp/templates?limit=100"),
     optionalMarketingApi("/whatsapp/templates/configured")
   ]);
@@ -589,6 +589,7 @@ async function renderMarketing() {
     configuredTemplates: configuredTemplatesResponse.data || [],
     templateLoadError: metaTemplatesResponse.error || configuredTemplatesResponse.error || null,
     replyLoadError: repliedResponse.error || null,
+    userLoadError: usersResponse.error || null,
     strictCampaignLifecycle: campaignsResponse.route?.startsWith("/campaigns") === true,
     decision: state.marketing.decision || null,
     replyFilter: state.marketing.replyFilter || "ALL"
@@ -765,6 +766,7 @@ function renderRepliedProspectsSection() {
   return `<section class="panel marketing-replies-panel" id="marketing-replies-panel">
     <div class="panel-title-row"><div><p class="eyebrow">REPLIED INTERESTED CUSTOMERS</p><h3>AI priority inbox</h3><p>Campaign replies are separated here. AI assigns Hot, Warm or Cold; your team controls importance, ownership and repeat-marketing eligibility.</p></div><button class="button button-secondary" id="select-repeat-marketing" type="button" ${counts.REPEAT ? "" : "disabled"}>Select repeat list (${counts.REPEAT})</button></div>
     ${state.marketing.replyLoadError ? `<div class="compatibility-note">Replied-customer classification will appear after the backend update. The rest of Marketing remains available.</div>` : ""}
+    ${state.marketing.userLoadError ? `<div class="compatibility-note">Sales-user assignment is temporarily unavailable. Campaign and customer data can still be used.</div>` : ""}
     <div class="reply-filter-bar">${["ALL", "IMPORTANT", "HOT", "WARM", "COLD", "REPEAT"].map((item) => `<button type="button" class="reply-filter ${filter === item ? "active" : ""}" data-reply-filter="${item}">${pretty(item)} <span>${counts[item]}</span></button>`).join("")}</div>
     <div class="reply-prospect-list">${visible.length ? visible.map(repliedProspectCard).join("") : '<div class="empty-state">No replied customers in this section yet.</div>'}</div>
     <p class="muted tiny-note reply-safety-note">Repeat marketing only makes the customer selectable for a future campaign. It never sends automatically, and an opt-out always overrides this setting.</p>
