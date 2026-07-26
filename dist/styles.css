@@ -213,11 +213,13 @@ tbody tr { cursor: pointer; transition: background .15s; } tbody tr:hover { back
 .wa-quoted { margin: -2px 0 7px; padding: 6px 8px; border-left: 3px solid #2ca98b; border-radius: 5px; background: rgba(26,100,81,.08); }
 .wa-quoted small { display: block; margin-bottom: 2px; color: #1d7965; font-size: 8px; font-weight: 900; }
 .wa-quoted p { overflow: hidden; color: #61706f; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.wa-media { display: block; width: min(340px, 100%); max-height: 320px; margin-bottom: 6px; overflow: hidden; border-radius: 7px; }
+.wa-attachment-block { display: grid; gap: 5px; min-width: 210px; margin-bottom: 6px; }
+.wa-media { display: block; width: min(340px, 100%); max-height: 320px; overflow: hidden; border-radius: 7px; }
 img.wa-media, video.wa-media { object-fit: cover; }
 .wa-media img { display: block; width: 100%; max-height: 320px; object-fit: cover; }
-.wa-audio { display: block; width: min(310px, 65vw); margin: 2px 0 5px; }
+.wa-audio { display: block; width: min(310px, 65vw); margin: 2px 0; }
 .wa-document, .wa-location, .wa-contact-card { display: flex; align-items: center; gap: 9px; min-width: 210px; margin-bottom: 6px; padding: 9px; border-radius: 8px; color: #263b42; background: rgba(255,255,255,.55); text-decoration: none; }
+.wa-attachment-block .wa-document { margin-bottom: 0; }
 .wa-document > span, .wa-location > span, .wa-contact-card > span { font-size: 22px; }
 .wa-document strong, .wa-document small, .wa-location strong, .wa-location small, .wa-contact-card strong, .wa-contact-card small { display: block; }
 .wa-document strong, .wa-location strong, .wa-contact-card strong { font-size: 10px; }
@@ -225,6 +227,13 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .wa-interactive-reply { margin-bottom: 5px; padding: 7px 9px; border-radius: 7px; color: #2e6d60; background: rgba(31,151,122,.1); font-size: 10px; font-weight: 700; }
 .wa-reaction-message { min-width: 40px; padding: 2px 4px; text-align: center; font-size: 23px; }
 .wa-attachment-missing { padding: 8px; border-radius: 7px; color: #9b5260; background: #ffecef; font-size: 9px; }
+.wa-file-actions { display: flex; gap: 5px; }
+.wa-file-actions button { padding: 5px 8px; border: 1px solid #cfdad6; border-radius: 6px; color: #27695b; background: rgba(255,255,255,.72); cursor: pointer; font-size: 8px; font-weight: 800; }
+.wa-file-actions button:hover { background: white; }.wa-file-actions button:disabled { opacity: .55; cursor: wait; }
+.wa-media-recovery { display: grid; grid-template-columns: auto minmax(0,1fr); align-items: center; gap: 8px; min-width: 230px; padding: 9px; border: 1px dashed #d8a25e; border-radius: 8px; background: #fff6e9; }
+.wa-media-recovery > span { grid-row: 1 / span 2; font-size: 21px; }.wa-media-recovery strong, .wa-media-recovery small { display: block; }
+.wa-media-recovery strong { color: #71502a; font-size: 9px; }.wa-media-recovery small { margin-top: 2px; color: #8b7358; font-size: 8px; line-height: 1.35; }
+.wa-media-recovery button { grid-column: 2; width: fit-content; padding: 5px 8px; border: 0; border-radius: 6px; color: white; background: #b7782d; cursor: pointer; font-size: 8px; font-weight: 800; }
 .wa-chat-empty { margin: 50px auto; padding: 13px 16px; border-radius: 9px; color: #68767b; background: rgba(255,255,255,.82); text-align: center; font-size: 11px; }
 .wa-composer { border-top: 1px solid #dfe4df; background: #f6f8f7; }
 .wa-compose-tabs { display: flex; align-items: center; gap: 6px; padding: 8px 12px 0; }

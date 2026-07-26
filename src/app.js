@@ -90,6 +90,7 @@ function showLogin() {
 function logout() {
   stopWhatsappPolling();
   discardVoiceRecording();
+  releaseMediaObjectUrls();
   localStorage.removeItem(authKey);
   state.session = null;
   state.importPayload = null;
@@ -136,6 +137,21 @@ async function uploadAttachment(file, contactId, conversationId) {
   if (response.status === 401) logout();
   if (!response.ok) throw new Error(payload.error?.message || payload.message || `Upload failed (${response.status})`);
   return payload.data;
+}
+
+async function fetchAttachmentBlob(attachmentId, { download = false } = {}) {
+  if (!state.session) throw new Error("Authentication required");
+  if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
+  const suffix = download ? "?download=true" : "";
+  const response = await fetch(`${config.apiBaseUrl}/attachments/${encodeURIComponent(attachmentId)}/content${suffix}`, {
+    headers: { authorization: `Bearer ${state.session.accessToken}` }
+  });
+  if (response.status === 401) logout();
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    throw new Error(payload.error?.message || payload.message || `File could not be opened (${response.status})`);
+  }
+  return response.blob();
 }
 
 async function refreshSession() {
@@ -276,6 +292,7 @@ async function loadWhatsappConversation(id, { incremental = false } = {}) {
 function renderWhatsappPage(draftText = "") {
   const wa = state.whatsapp;
   const selected = selectedConversation();
+  releaseMediaObjectUrls();
   page.innerHTML = `
     <div class="wa-page-head">
       <div><h1>WhatsApp Inbox</h1><p>Real-time client chat, media, team ownership and orders in one place.</p></div>
@@ -346,7 +363,7 @@ function waComposer(windowStatus, draftText) {
     ${useText ? `<form id="wa-composer-form" class="wa-text-composer">
         <div class="wa-composer-toolbar">
           <select id="wa-quick-reply"><option value="">Quick reply…</option>${wa.quickReplies.map((item) => `<option value="${attr(item.quickReplyId)}">${esc(item.shortcut)} · ${esc(item.title)}</option>`).join("")}<option value="__CREATE__">+ Add custom quick reply</option></select>
-          <label class="wa-tool-button" title="Attach image, video, audio or document">📎<input id="wa-attachment-input" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" hidden /></label>
+          <label class="wa-tool-button" title="Attach image, video, audio or document">📎<input id="wa-attachment-input" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf" hidden /></label>
           <button class="wa-tool-button ${wa.recording ? "recording" : ""}" id="wa-record-audio" type="button" title="Record voice note">${wa.recording ? "■ Stop" : "🎙 Voice"}</button>
           <button class="wa-tool-button" id="wa-share-location" type="button" title="Share current location">⌖</button>
           <button class="wa-tool-button" id="wa-share-contact" type="button" title="Share a contact card">👤</button>
@@ -429,9 +446,14 @@ function waMessage(message) {
   const quoted = message.replyTo || (message.replyToMessageId
     ? state.whatsapp.messages.find((item) => item.messageId === message.replyToMessageId)
     : null);
+  const attachments = message.attachments || [];
+  const recoverableMedia = ["IMAGE", "VIDEO", "AUDIO", "DOCUMENT"].includes(message.type);
+  const mediaBody = attachments.length
+    ? attachments.map(waAttachment).join("")
+    : recoverableMedia ? waMissingMedia(message) : "";
   const body = message.type === "REACTION"
     ? `<div class="wa-reaction-message">${esc(message.text || "♡")}</div>`
-    : `${waStructuredMessage(message)}${(message.attachments || []).map(waAttachment).join("")}${message.text ? `<p>${linkify(message.text)}</p>` : (!message.attachments?.length && !waHasStructuredBody(message) ? `<p>[${esc(pretty(message.type))}]</p>` : "")}`;
+    : `${waStructuredMessage(message)}${mediaBody}${message.text ? `<p>${linkify(message.text)}</p>` : (!attachments.length && !recoverableMedia && !waHasStructuredBody(message) ? `<p>[${esc(pretty(message.type))}]</p>` : "")}`;
   return `<div class="wa-message-row ${outbound ? "outbound" : internal ? "internal" : "inbound"}" data-message-row="${attr(message.messageId)}">
     <div class="wa-bubble">
       ${quoted ? `<div class="wa-quoted"><small>${quoted.direction === "INBOUND" ? "Customer" : "RX team"}</small><p>${esc(quoted.text || `[${pretty(quoted.type)}]`)}</p></div>` : ""}
@@ -448,11 +470,27 @@ function waAttachment(attachment) {
   const url = attachment.signedUrl || "";
   const mime = attachment.mimeType || "";
   const name = attachment.originalFilename || "Attachment";
+  const id = attachment.attachmentId || attachment.id || "";
   if (!url) return `<div class="wa-attachment-missing">Attachment unavailable</div>`;
-  if (mime.startsWith("image/")) return `<a class="wa-media" href="${attr(url)}" target="_blank" rel="noreferrer"><img src="${attr(url)}" alt="${attr(name)}" loading="lazy" /></a>`;
-  if (mime.startsWith("video/")) return `<video class="wa-media" src="${attr(url)}" controls preload="metadata"></video>`;
-  if (mime.startsWith("audio/")) return `<audio class="wa-audio" src="${attr(url)}" controls preload="metadata"></audio>`;
-  return `<a class="wa-document" href="${attr(url)}" target="_blank" rel="noreferrer"><span>📄</span><div><strong>${esc(name)}</strong><small>${esc(pretty(mime || "document"))}</small></div></a>`;
+  const actions = `<div class="wa-file-actions"><button data-media-open="${attr(id)}" data-media-name="${attr(name)}" type="button">Open</button><button data-media-download="${attr(id)}" data-media-name="${attr(name)}" type="button">Download</button></div>`;
+  if (mime.startsWith("image/")) {
+    return `<div class="wa-attachment-block"><a class="wa-media" data-media-link="${attr(id)}" href="${attr(url)}" target="_blank" rel="noreferrer"><img data-protected-media="${attr(id)}" src="${attr(url)}" alt="${attr(name)}" loading="lazy" /></a>${actions}</div>`;
+  }
+  if (mime.startsWith("video/")) {
+    return `<div class="wa-attachment-block"><video class="wa-media" data-protected-media="${attr(id)}" src="${attr(url)}" controls preload="metadata"></video>${actions}</div>`;
+  }
+  if (mime.startsWith("audio/")) {
+    return `<div class="wa-attachment-block"><audio class="wa-audio" data-protected-media="${attr(id)}" src="${attr(url)}" controls preload="metadata"></audio>${actions}</div>`;
+  }
+  return `<div class="wa-attachment-block"><div class="wa-document"><span>📄</span><div><strong>${esc(name)}</strong><small>${esc(pretty(mime || "document"))}${attachment.sizeBytes ? ` · ${esc(fileSize(attachment.sizeBytes))}` : ""}</small></div></div>${actions}</div>`;
+}
+
+function waMissingMedia(message) {
+  const status = message.metadata?.mediaArchiveStatus || "FAILED";
+  const label = status === "DOWNLOADING" || status === "PENDING"
+    ? "Media is being prepared"
+    : status === "RETRY" ? "Media download will retry" : `${pretty(message.type)} is not available yet`;
+  return `<div class="wa-media-recovery"><span>📎</span><div><strong>${esc(label)}</strong><small>${esc(message.metadata?.mediaArchiveError || "Use Retry media to recover the original WhatsApp file.")}</small></div><button data-retry-media="${attr(message.messageId)}" type="button">Retry media</button></div>`;
 }
 
 function waStructuredMessage(message) {
@@ -527,6 +565,7 @@ function bindWhatsappEvents() {
   document.querySelector("#wa-enable-alerts")?.addEventListener("click", enableDesktopAlerts);
   document.querySelector("#wa-quick-reply")?.addEventListener("change", selectQuickReply);
   document.querySelector("#wa-attachment-input")?.addEventListener("change", sendSelectedAttachment);
+  bindMediaEvents();
   document.querySelector("#wa-record-audio")?.addEventListener("click", toggleVoiceRecording);
   document.querySelector("#wa-share-location")?.addEventListener("click", shareCurrentLocation);
   document.querySelector("#wa-share-contact")?.addEventListener("click", shareContactCard);
@@ -567,6 +606,101 @@ function bindWhatsappEvents() {
     prefillUtilityValues(true);
     renderWhatsappPage();
   }));
+}
+
+function bindMediaEvents() {
+  document.querySelectorAll("[data-retry-media]").forEach((button) => button.addEventListener("click", () => {
+    retryWhatsappMedia(button.dataset.retryMedia, button);
+  }));
+  document.querySelectorAll("[data-media-open]").forEach((button) => button.addEventListener("click", () => {
+    openProtectedAttachment(button.dataset.mediaOpen, button.dataset.mediaName, button);
+  }));
+  document.querySelectorAll("[data-media-download]").forEach((button) => button.addEventListener("click", () => {
+    downloadProtectedAttachment(button.dataset.mediaDownload, button.dataset.mediaName, button);
+  }));
+  document.querySelectorAll("[data-protected-media]").forEach((element) => {
+    element.addEventListener("error", () => hydrateProtectedMedia(element), { once: true });
+  });
+}
+
+async function retryWhatsappMedia(messageId, button) {
+  button.disabled = true;
+  button.textContent = "Recovering…";
+  try {
+    await api(`/messages/${encodeURIComponent(messageId)}/media/retry`, { method: "POST", body: {} });
+    await loadWhatsappConversation(state.whatsapp.selectedId);
+    renderWhatsappPage();
+    notify("WhatsApp media recovered.");
+  } catch (error) {
+    notify(error.message, true);
+    if (document.body.contains(button)) {
+      button.disabled = false;
+      button.textContent = "Retry media";
+    }
+  }
+}
+
+async function hydrateProtectedMedia(element) {
+  if (element.dataset.mediaFallback === "loading" || element.dataset.mediaFallback === "ready") return;
+  element.dataset.mediaFallback = "loading";
+  try {
+    const blob = await fetchAttachmentBlob(element.dataset.protectedMedia);
+    const objectUrl = URL.createObjectURL(blob);
+    state.whatsapp.mediaObjectUrls.push(objectUrl);
+    element.src = objectUrl;
+    element.dataset.mediaFallback = "ready";
+    const link = document.querySelector(`[data-media-link="${CSS.escape(element.dataset.protectedMedia)}"]`);
+    if (link) link.href = objectUrl;
+  } catch (error) {
+    element.dataset.mediaFallback = "failed";
+    notify(error.message, true);
+  }
+}
+
+async function openProtectedAttachment(attachmentId, filename, button) {
+  const popup = window.open("about:blank", "_blank");
+  if (popup) popup.opener = null;
+  button.disabled = true;
+  try {
+    const blob = await fetchAttachmentBlob(attachmentId);
+    const objectUrl = URL.createObjectURL(blob);
+    if (popup) popup.location.replace(objectUrl);
+    else {
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.click();
+    }
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  } catch (error) {
+    popup?.close();
+    notify(error.message, true);
+  } finally {
+    if (document.body.contains(button)) button.disabled = false;
+  }
+}
+
+async function downloadProtectedAttachment(attachmentId, filename, button) {
+  button.disabled = true;
+  try {
+    const blob = await fetchAttachmentBlob(attachmentId, { download: true });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename || "attachment";
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    if (document.body.contains(button)) button.disabled = false;
+  }
+}
+
+function releaseMediaObjectUrls() {
+  for (const objectUrl of state.whatsapp?.mediaObjectUrls || []) URL.revokeObjectURL(objectUrl);
+  if (state.whatsapp) state.whatsapp.mediaObjectUrls = [];
 }
 
 function bindConversationRows() {
@@ -1184,6 +1318,7 @@ function messageStatus(status) { return ({ QUEUED: "○", SENT: "✓", DELIVERED
 function shortTime(value) { const parsed = asDate(value); return parsed ? new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit" }).format(parsed) : ""; }
 function asDate(value) { if (!value) return null; if (value._seconds) return new Date(value._seconds * 1000); const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? null : parsed; }
 function compactDuration(ms) { const hours = Math.floor(ms / 3_600_000); const minutes = Math.max(0, Math.floor((ms % 3_600_000) / 60_000)); return `${hours}h ${minutes}m left`; }
+function fileSize(bytes) { const value = Number(bytes || 0); if (value < 1024) return `${value} B`; if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`; return `${(value / 1024 ** 2).toFixed(1)} MB`; }
 function mergeById(current, incoming, field) { const map = new Map(current.map((item) => [item[field] || item.id, item])); incoming.forEach((item) => map.set(item[field] || item.id, { ...(map.get(item[field] || item.id) || {}), ...item })); return [...map.values()]; }
 function freshWhatsappState() {
   return {
@@ -1207,6 +1342,7 @@ function freshWhatsappState() {
     discardRecording: false,
     mediaRecorder: null,
     mediaStream: null,
+    mediaObjectUrls: [],
     lastNotificationKey: null,
     syncedAt: null,
     timer: null
