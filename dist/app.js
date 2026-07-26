@@ -89,6 +89,7 @@ function showLogin() {
 
 function logout() {
   stopWhatsappPolling();
+  discardVoiceRecording();
   localStorage.removeItem(authKey);
   state.session = null;
   state.importPayload = null;
@@ -116,6 +117,25 @@ async function api(path, options = {}) {
   if (response.status === 401) logout();
   if (!response.ok) throw new Error(payload.error?.message || payload.message || `Request failed (${response.status})`);
   return payload;
+}
+
+async function uploadAttachment(file, contactId, conversationId) {
+  if (!state.session) throw new Error("Authentication required");
+  if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
+  const query = new URLSearchParams({ contactId, conversationId });
+  const response = await fetch(`${config.apiBaseUrl}/attachments?${query}`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${state.session.accessToken}`,
+      "content-type": file.type || "application/octet-stream",
+      "x-filename": encodeURIComponent(file.name || "attachment.bin")
+    },
+    body: file
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) logout();
+  if (!response.ok) throw new Error(payload.error?.message || payload.message || `Upload failed (${response.status})`);
+  return payload.data;
 }
 
 async function refreshSession() {
@@ -150,6 +170,7 @@ async function renderRoute() {
   document.querySelector(".sidebar").classList.remove("open");
   const route = (location.hash.replace(/^#/, "") || "dashboard").split("/");
   const base = route[0];
+  if (base !== "whatsapp") discardVoiceRecording();
   if (["import", "marketing"].includes(base) && !["OWNER", "ADMIN"].includes(state.session?.role)) {
     location.hash = "#dashboard";
     return;
@@ -196,12 +217,18 @@ async function renderWhatsapp(requestedConversationId) {
   pageTitle.textContent = "WhatsApp Inbox";
   const wa = state.whatsapp;
   const syncStartedAt = Date.now();
-  const [conversationResult, templateResult] = await Promise.all([
+  const [conversationResult, templateResult, quickReplyResult, usersResult, capabilitiesResult] = await Promise.all([
     api("/conversations?limit=100&sortBy=lastMessageAt&sortOrder=desc"),
-    wa.templates.length ? Promise.resolve({ data: wa.templates }) : api("/whatsapp/utility-templates")
+    wa.templates.length ? Promise.resolve({ data: wa.templates }) : api("/whatsapp/utility-templates"),
+    wa.quickReplies.length ? Promise.resolve({ data: wa.quickReplies }) : optionalInboxApi("/whatsapp/quick-replies?limit=100", []),
+    wa.users.length ? Promise.resolve({ data: wa.users }) : optionalInboxApi("/users?limit=100", []),
+    wa.capabilities ? Promise.resolve({ data: wa.capabilities }) : optionalInboxApi("/whatsapp/capabilities", null)
   ]);
   wa.conversations = conversationResult.data.filter((item) => item.currentChannel === "WHATSAPP");
   wa.templates = templateResult.data;
+  wa.quickReplies = quickReplyResult.data || [];
+  wa.users = (usersResult.data || []).filter((item) => item.active !== false);
+  wa.capabilities = capabilitiesResult.data || null;
   wa.selectedId = requestedConversationId || wa.selectedId || conversationId(wa.conversations[0]);
   if (wa.selectedId && !wa.conversations.some((item) => conversationId(item) === wa.selectedId)) {
     wa.selectedId = conversationId(wa.conversations[0]);
@@ -210,6 +237,15 @@ async function renderWhatsapp(requestedConversationId) {
   wa.syncedAt = syncStartedAt;
   renderWhatsappPage();
   startWhatsappPolling();
+}
+
+async function optionalInboxApi(path, fallback) {
+  try {
+    return await api(path);
+  } catch (error) {
+    console.warn(`Optional inbox feature unavailable: ${path}`, error);
+    return { data: fallback, error: error.message };
+  }
 }
 
 async function loadWhatsappConversation(id, { incremental = false } = {}) {
@@ -242,8 +278,12 @@ function renderWhatsappPage(draftText = "") {
   const selected = selectedConversation();
   page.innerHTML = `
     <div class="wa-page-head">
-      <div><h1>WhatsApp Inbox</h1><p>Client chat, order history and transactional updates in one place.</p></div>
-      <a class="button button-primary" href="#clients">+ Start client chat</a>
+      <div><h1>WhatsApp Inbox</h1><p>Real-time client chat, media, team ownership and orders in one place.</p></div>
+      <div class="wa-page-actions">
+        <span class="wa-api-state ${wa.capabilities?.connected ? "connected" : "disconnected"}">${wa.capabilities?.connected ? "Cloud API connected" : "API setup needed"}</span>
+        <button class="button button-secondary" id="wa-enable-alerts" type="button">Enable alerts</button>
+        <a class="button button-primary" href="#clients">+ Start client chat</a>
+      </div>
     </div>
     <div class="wa-shell">
       <aside class="wa-inbox-panel">
@@ -269,12 +309,16 @@ function whatsappChatMarkup(conversation, draftText) {
   const contact = wa.overview?.contact || conversation.contact || {};
   const name = contact.companyName || contact.contactPerson || "WhatsApp client";
   const windowStatus = whatsappWindow();
+  const important = (contact.tags || []).includes("IMPORTANT");
   return `
     <section class="wa-chat-panel">
       <header class="wa-chat-head">
         <a class="wa-mobile-back" href="#whatsapp" aria-label="Back to conversations">‹</a><div class="wa-chat-person"><span class="wa-avatar">${esc(initials(name))}</span><div><strong>${esc(name)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "")}</small></div></div>
         <div class="wa-chat-actions">
           <span class="wa-window ${windowStatus.open ? "open" : "closed"}">${windowStatus.open ? `Free reply · ${esc(windowStatus.remaining)}` : "Utility template required"}</span>
+          ${contact.primaryPhone ? `<a class="wa-icon-button" href="tel:+${attr(contact.primaryPhone)}" title="Call customer">☎</a>` : ""}
+          <button class="wa-icon-button wa-details-button" id="wa-toggle-client-panel" title="Client workspace">ⓘ</button>
+          <button class="wa-icon-button ${important ? "important" : ""}" id="wa-toggle-important" title="${important ? "Remove Important" : "Mark Important"}">${important ? "★" : "☆"}</button>
           <button class="wa-icon-button" id="wa-toggle-status" title="${conversation.status === "CLOSED" ? "Reopen" : "Close"} conversation">${conversation.status === "CLOSED" ? "↻" : "✓"}</button>
         </div>
       </header>
@@ -284,20 +328,33 @@ function whatsappChatMarkup(conversation, draftText) {
       </div>
       ${waComposer(windowStatus, draftText)}
     </section>
-    <aside class="wa-order-panel">${waOrderPanel(contact)}</aside>`;
+    <aside class="wa-order-panel ${wa.clientPanelOpen ? "open" : ""}">${waOrderPanel(contact)}</aside>`;
 }
 
 function waComposer(windowStatus, draftText) {
   const wa = state.whatsapp;
   const template = selectedUtilityTemplate();
   const useText = wa.mode === "TEXT" && windowStatus.open;
+  const quoted = wa.messages.find((item) => item.messageId === wa.replyToMessageId);
   return `<div class="wa-composer">
     <div class="wa-compose-tabs">
       <button class="${useText ? "active" : ""}" data-wa-mode="TEXT" ${windowStatus.open ? "" : "disabled"}>Reply</button>
       <button class="${!useText ? "active" : ""}" data-wa-mode="TEMPLATE">Utility update <span>low cost</span></button>
       <small>${windowStatus.open ? "Customer replied within 24 hours" : "Normal reply is locked outside 24 hours"}</small>
     </div>
-    ${useText ? `<form id="wa-composer-form" class="wa-text-composer"><textarea id="wa-message-input" rows="1" maxlength="4096" placeholder="Type a message...">${esc(draftText)}</textarea><button class="wa-send-button" type="submit">Send</button></form>` : `
+    ${useText ? `<form id="wa-composer-form" class="wa-text-composer">
+        <div class="wa-composer-toolbar">
+          <select id="wa-quick-reply"><option value="">Quick reply…</option>${wa.quickReplies.map((item) => `<option value="${attr(item.quickReplyId)}">${esc(item.shortcut)} · ${esc(item.title)}</option>`).join("")}<option value="__CREATE__">+ Add custom quick reply</option></select>
+          <label class="wa-tool-button" title="Attach image, video, audio or document">📎<input id="wa-attachment-input" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt" hidden /></label>
+          <button class="wa-tool-button ${wa.recording ? "recording" : ""}" id="wa-record-audio" type="button" title="Record voice note">${wa.recording ? "■ Stop" : "🎙 Voice"}</button>
+          <button class="wa-tool-button" id="wa-share-location" type="button" title="Share current location">⌖</button>
+          <button class="wa-tool-button" id="wa-share-contact" type="button" title="Share a contact card">👤</button>
+          <button class="wa-tool-button" id="wa-interactive-buttons" type="button" title="Send quick-reply buttons">⚡</button>
+          <button class="wa-tool-button" id="wa-add-internal-note" type="button" title="Add an internal note">📝</button>
+        </div>
+        ${quoted ? `<div class="wa-replying"><div><small>Replying to ${quoted.direction === "INBOUND" ? "customer" : "team"}</small><p>${esc(quoted.text || `[${pretty(quoted.type)}]`)}</p></div><button id="wa-cancel-reply" type="button">×</button></div>` : ""}
+        <div class="wa-input-row"><textarea id="wa-message-input" rows="1" maxlength="4096" placeholder="Type a message or / shortcut…">${esc(draftText)}</textarea><button class="wa-send-button" type="submit">Send</button></div>
+      </form>` : `
       <form id="wa-composer-form" class="wa-template-composer">
         <div class="wa-template-row"><label>Approved Utility template<select id="wa-template-select">${wa.templates.map((item) => `<option value="${attr(item.id)}" ${item.id === template?.id ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></label>
           <label>Related order<select id="wa-template-order"><option value="">Select order</option>${(wa.overview?.orders || []).map((order) => `<option value="${attr(order.orderId)}" ${order.orderId === wa.selectedOrderId ? "selected" : ""}>${esc(orderReference(order))} · ${esc(pretty(order.status))}</option>`).join("")}</select></label></div>
@@ -309,11 +366,25 @@ function waComposer(windowStatus, draftText) {
 }
 
 function waOrderPanel(contact) {
-  const orders = state.whatsapp.overview?.orders || [];
-  return `<div class="wa-client-card"><p class="eyebrow">CLIENT & ORDERS</p><h3>${esc(contact.companyName || contact.contactPerson || "Client")}</h3><p>${esc(contact.salesPersonName || "Unassigned sales person")}</p><a href="#client/${attr(contact.contactId || "")}">View complete profile →</a></div>
+  const wa = state.whatsapp;
+  const orders = wa.overview?.orders || [];
+  const assignedTo = selectedConversation()?.assignedTo || contact.assignedTo || "";
+  const canAssign = ["OWNER", "ADMIN"].includes(state.session?.role);
+  const tags = contact.tags || [];
+  const callReady = wa.capabilities?.externalSetup?.calling?.status || "META_ELIGIBILITY_REQUIRED";
+  return `<div class="wa-client-card"><button class="wa-panel-close" id="wa-close-client-panel" type="button" aria-label="Close client workspace">×</button><p class="eyebrow">CLIENT WORKSPACE</p><h3>${esc(contact.companyName || contact.contactPerson || "Client")}</h3><p>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "City not set")}</p><a href="#client/${attr(contact.contactId || "")}">View complete profile →</a></div>
+    <div class="wa-crm-controls">
+      <label>Conversation owner<select id="wa-assignee" ${canAssign && wa.users.length ? "" : "disabled"}><option value="">Unassigned</option>${wa.users.map((user) => `<option value="${attr(user.userId)}" ${assignedTo === user.userId ? "selected" : ""}>${esc(user.name || user.email || user.userId)}</option>`).join("")}</select></label>
+      <div class="wa-tag-head"><strong>Tags</strong><button id="wa-add-tag" type="button">+ Add</button></div>
+      <div class="wa-tag-list">${tags.length ? tags.map((tag) => `<span>${esc(pretty(tag))}<button data-remove-tag="${attr(tag)}" type="button">×</button></span>`).join("") : "<small>No tags yet</small>"}</div>
+      <label>Private customer notes<textarea id="wa-customer-notes" maxlength="5000" placeholder="Visible only inside CRM">${esc(contact.notes || "")}</textarea></label>
+      <button class="wa-side-action" id="wa-save-notes" type="button">Save notes</button>
+      <div class="wa-followup-box"><strong>Schedule follow-up</strong><input id="wa-followup-at" type="datetime-local" /><input id="wa-followup-note" maxlength="500" placeholder="Follow-up note" /><button class="wa-side-action" id="wa-create-followup" type="button">Add follow-up</button></div>
+      <details class="wa-capabilities"><summary>Platform readiness</summary><p><b>Messaging:</b> ${wa.capabilities?.connected ? "Connected" : "Needs setup"}</p><p><b>Business App coexistence:</b> Meta onboarding required</p><p><b>WhatsApp calling:</b> ${esc(pretty(callReady))}</p><p><b>Flows:</b> API-ready; each Flow must be created and published in Meta.</p></details>
+    </div>
     <div class="wa-order-head"><strong>Orders</strong><span>${orders.length}</span></div>
     <div class="wa-order-list">${orders.length ? orders.map(waOrderCard).join("") : '<div class="wa-no-orders">No linked orders found.</div>'}</div>
-    <div class="wa-cost-note"><strong>Cost control</strong><p>Free-form replies are used only in the active service window. Outside it, only approved Utility templates can be sent.</p></div>`;
+    <div class="wa-cost-note"><strong>Account safety</strong><p>Free-form replies run only in the active service window. Outside it, this CRM requires a correctly classified approved template.</p></div>`;
 }
 
 function waOrderCard(order) {
@@ -352,7 +423,57 @@ function waMessage(message) {
   const internal = message.direction === "INTERNAL";
   const outbound = message.direction === "OUTBOUND";
   const status = outbound ? messageStatus(message.status) : "";
-  return `<div class="wa-message-row ${outbound ? "outbound" : internal ? "internal" : "inbound"}"><div class="wa-bubble"><p>${esc(message.text || `[${pretty(message.type)}]`)}</p><span>${esc(shortTime(message.createdAt))}${status ? ` · ${status}` : ""}</span>${message.type === "TEMPLATE" ? '<em>UTILITY</em>' : ""}</div></div>`;
+  const quoted = message.replyTo || (message.replyToMessageId
+    ? state.whatsapp.messages.find((item) => item.messageId === message.replyToMessageId)
+    : null);
+  const body = message.type === "REACTION"
+    ? `<div class="wa-reaction-message">${esc(message.text || "♡")}</div>`
+    : `${waStructuredMessage(message)}${(message.attachments || []).map(waAttachment).join("")}${message.text ? `<p>${linkify(message.text)}</p>` : (!message.attachments?.length && !waHasStructuredBody(message) ? `<p>[${esc(pretty(message.type))}]</p>` : "")}`;
+  return `<div class="wa-message-row ${outbound ? "outbound" : internal ? "internal" : "inbound"}" data-message-row="${attr(message.messageId)}">
+    <div class="wa-bubble">
+      ${quoted ? `<div class="wa-quoted"><small>${quoted.direction === "INBOUND" ? "Customer" : "RX team"}</small><p>${esc(quoted.text || `[${pretty(quoted.type)}]`)}</p></div>` : ""}
+      ${body}
+      <span>${esc(shortTime(message.createdAt))}${status ? ` · ${status}` : ""}</span>
+      ${message.type === "TEMPLATE" ? `<em>${esc(pretty(message.metadata?.templateCategory || "TEMPLATE"))}</em>` : ""}
+      ${!internal && message.type !== "REACTION" ? `<div class="wa-message-actions"><button data-reply-message="${attr(message.messageId)}" type="button" title="Reply">↩</button><button data-react-message="${attr(message.messageId)}" data-react-emoji="👍" type="button" title="React">👍</button></div>` : ""}
+    </div>
+  </div>`;
+}
+
+function waAttachment(attachment) {
+  const url = attachment.signedUrl || "";
+  const mime = attachment.mimeType || "";
+  const name = attachment.originalFilename || "Attachment";
+  if (!url) return `<div class="wa-attachment-missing">Attachment unavailable</div>`;
+  if (mime.startsWith("image/")) return `<a class="wa-media" href="${attr(url)}" target="_blank" rel="noreferrer"><img src="${attr(url)}" alt="${attr(name)}" loading="lazy" /></a>`;
+  if (mime.startsWith("video/")) return `<video class="wa-media" src="${attr(url)}" controls preload="metadata"></video>`;
+  if (mime.startsWith("audio/")) return `<audio class="wa-audio" src="${attr(url)}" controls preload="metadata"></audio>`;
+  return `<a class="wa-document" href="${attr(url)}" target="_blank" rel="noreferrer"><span>📄</span><div><strong>${esc(name)}</strong><small>${esc(pretty(mime || "document"))}</small></div></a>`;
+}
+
+function waStructuredMessage(message) {
+  const location = message.metadata?.location;
+  if (message.type === "LOCATION" && location?.latitude !== undefined && location?.longitude !== undefined) {
+    const map = `https://www.google.com/maps?q=${encodeURIComponent(`${location.latitude},${location.longitude}`)}`;
+    return `<a class="wa-location" href="${attr(map)}" target="_blank" rel="noreferrer"><span>📍</span><div><strong>${esc(location.name || "Shared location")}</strong><small>${esc(location.address || `${location.latitude}, ${location.longitude}`)}</small></div></a>`;
+  }
+  const contacts = message.metadata?.contacts;
+  if (message.type === "CONTACT" && Array.isArray(contacts) && contacts.length) {
+    return contacts.map((contact) => `<div class="wa-contact-card"><span>👤</span><div><strong>${esc(contact.name?.formatted_name || "Contact")}</strong><small>${esc(contact.phones?.[0]?.phone || "")}</small></div></div>`).join("");
+  }
+  if (message.type === "INTERACTIVE") {
+    const interactive = message.metadata?.interactive || message.metadata?.button;
+    if (interactive) return `<div class="wa-interactive-reply">↪ ${esc(message.text || "Interactive response")}</div>`;
+  }
+  return "";
+}
+
+function waHasStructuredBody(message) {
+  return Boolean(
+    (message.type === "LOCATION" && message.metadata?.location)
+    || (message.type === "CONTACT" && message.metadata?.contacts)
+    || (message.type === "INTERACTIVE" && (message.metadata?.interactive || message.metadata?.button))
+  );
 }
 
 function bindWhatsappEvents() {
@@ -389,6 +510,40 @@ function bindWhatsappEvents() {
   }));
   document.querySelector("#wa-composer-form")?.addEventListener("submit", sendWhatsappMessage);
   document.querySelector("#wa-toggle-status")?.addEventListener("click", toggleConversationStatus);
+  document.querySelector("#wa-toggle-client-panel")?.addEventListener("click", () => {
+    state.whatsapp.clientPanelOpen = !state.whatsapp.clientPanelOpen;
+    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+  });
+  document.querySelector("#wa-close-client-panel")?.addEventListener("click", () => {
+    state.whatsapp.clientPanelOpen = false;
+    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+  });
+  document.querySelector("#wa-toggle-important")?.addEventListener("click", toggleImportantContact);
+  document.querySelector("#wa-enable-alerts")?.addEventListener("click", enableDesktopAlerts);
+  document.querySelector("#wa-quick-reply")?.addEventListener("change", selectQuickReply);
+  document.querySelector("#wa-attachment-input")?.addEventListener("change", sendSelectedAttachment);
+  document.querySelector("#wa-record-audio")?.addEventListener("click", toggleVoiceRecording);
+  document.querySelector("#wa-share-location")?.addEventListener("click", shareCurrentLocation);
+  document.querySelector("#wa-share-contact")?.addEventListener("click", shareContactCard);
+  document.querySelector("#wa-interactive-buttons")?.addEventListener("click", sendInteractiveButtons);
+  document.querySelector("#wa-add-internal-note")?.addEventListener("click", addInternalNote);
+  document.querySelector("#wa-cancel-reply")?.addEventListener("click", () => {
+    state.whatsapp.replyToMessageId = null;
+    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+  });
+  document.querySelectorAll("[data-reply-message]").forEach((button) => button.addEventListener("click", () => {
+    state.whatsapp.replyToMessageId = button.dataset.replyMessage;
+    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+    document.querySelector("#wa-message-input")?.focus();
+  }));
+  document.querySelectorAll("[data-react-message]").forEach((button) => button.addEventListener("click", () => {
+    sendReaction(button.dataset.reactMessage, button.dataset.reactEmoji, button);
+  }));
+  document.querySelector("#wa-assignee")?.addEventListener("change", assignConversation);
+  document.querySelector("#wa-add-tag")?.addEventListener("click", addContactTag);
+  document.querySelectorAll("[data-remove-tag]").forEach((button) => button.addEventListener("click", () => removeContactTag(button.dataset.removeTag)));
+  document.querySelector("#wa-save-notes")?.addEventListener("click", saveCustomerNotes);
+  document.querySelector("#wa-create-followup")?.addEventListener("click", createWhatsappFollowup);
   document.querySelectorAll("[data-order-status]").forEach((select) => select.addEventListener("change", updateOrderStatus));
   document.querySelectorAll("[data-select-order]").forEach((card) => card.addEventListener("click", (event) => {
     if (event.target.closest("select,button")) return;
@@ -408,6 +563,7 @@ function bindWhatsappEvents() {
 
 function bindConversationRows() {
   document.querySelectorAll("[data-conversation-id]").forEach((button) => button.addEventListener("click", () => {
+    state.whatsapp.clientPanelOpen = false;
     location.hash = `#whatsapp/${button.dataset.conversationId}`;
   }));
 }
@@ -422,7 +578,7 @@ async function sendWhatsappMessage(event) {
     if (wa.mode === "TEXT" && whatsappWindow().open) {
       const text = document.querySelector("#wa-message-input").value.trim();
       if (!text) return;
-      body = { type: "TEXT", text };
+      body = { type: "TEXT", text, replyToMessageId: wa.replyToMessageId || null };
     } else {
       document.querySelectorAll("[data-template-field]").forEach((input) => { wa.templateValues[input.dataset.templateField] = input.value.trim(); });
       body = { type: "TEMPLATE", utilityTemplateId: selectedUtilityTemplate()?.id, templateVariables: wa.templateValues };
@@ -432,6 +588,7 @@ async function sendWhatsappMessage(event) {
       headers: { "idempotency-key": `${wa.selectedId}-${Date.now()}-${Math.random().toString(36).slice(2)}` },
       body
     });
+    wa.replyToMessageId = null;
     await loadWhatsappConversation(wa.selectedId);
     renderWhatsappPage();
     notify(body.type === "TEMPLATE" ? "Utility update queued for WhatsApp." : "Message queued for WhatsApp.");
@@ -439,6 +596,405 @@ async function sendWhatsappMessage(event) {
     notify(error.message, true);
   } finally {
     if (document.body.contains(button)) button.disabled = false;
+  }
+}
+
+async function selectQuickReply(event) {
+  const value = event.target.value;
+  if (!value) return;
+  if (value === "__CREATE__") {
+    await createCustomQuickReply();
+    return;
+  }
+  const reply = state.whatsapp.quickReplies.find((item) => item.quickReplyId === value || item.id === value);
+  const input = document.querySelector("#wa-message-input");
+  if (reply && input) {
+    input.value = reply.text;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }
+  event.target.value = "";
+}
+
+async function createCustomQuickReply() {
+  const shortcut = prompt("Shortcut, for example /sample:");
+  if (!shortcut) return;
+  const title = prompt("Quick reply name:");
+  if (!title) return;
+  const text = prompt("Message text:");
+  if (!text) return;
+  try {
+    const { data } = await api("/whatsapp/quick-replies", {
+      method: "POST",
+      body: { shortcut: shortcut.trim(), title: title.trim(), text: text.trim(), category: "GENERAL" }
+    });
+    state.whatsapp.quickReplies.push(data);
+    renderWhatsappPage();
+    notify("Quick reply saved.");
+  } catch (error) {
+    notify(error.message, true);
+  }
+}
+
+async function sendSelectedAttachment(event) {
+  const file = event.target.files?.[0];
+  event.target.value = "";
+  if (!file) return;
+  await sendAttachmentFile(file, document.querySelector("#wa-message-input")?.value.trim() || "");
+}
+
+async function sendAttachmentFile(file, caption = "") {
+  const wa = state.whatsapp;
+  const conversation = selectedConversation();
+  if (!conversation || !wa.overview?.contact?.contactId) return;
+  if (!whatsappWindow().open) {
+    notify("Media can be sent as a normal reply only while the 24-hour service window is open.", true);
+    return;
+  }
+  const kind = messageTypeForFile(file);
+  notify(`Uploading ${file.name || pretty(kind)}…`);
+  try {
+    const attachment = await uploadAttachment(file, wa.overview.contact.contactId, wa.selectedId);
+    await api(`/conversations/${encodeURIComponent(wa.selectedId)}/messages`, {
+      method: "POST",
+      headers: { "idempotency-key": `${wa.selectedId}-media-${Date.now()}-${Math.random().toString(36).slice(2)}` },
+      body: {
+        type: kind,
+        text: kind === "AUDIO" ? "" : caption,
+        attachmentIds: [attachment.attachmentId],
+        replyToMessageId: wa.replyToMessageId || null
+      }
+    });
+    wa.replyToMessageId = null;
+    await loadWhatsappConversation(wa.selectedId);
+    renderWhatsappPage();
+    notify(`${pretty(kind)} queued for WhatsApp.`);
+  } catch (error) {
+    notify(error.message, true);
+  }
+}
+
+function messageTypeForFile(file) {
+  const mime = String(file.type || "").toLowerCase();
+  if (mime.startsWith("image/")) return "IMAGE";
+  if (mime.startsWith("video/")) return "VIDEO";
+  if (mime.startsWith("audio/")) return "AUDIO";
+  return "DOCUMENT";
+}
+
+async function toggleVoiceRecording() {
+  const wa = state.whatsapp;
+  if (wa.recording && wa.mediaRecorder) {
+    wa.mediaRecorder.stop();
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+    notify("Voice recording is not supported by this browser. You can attach an audio file instead.", true);
+    return;
+  }
+  if (!whatsappWindow().open) {
+    notify("Voice notes can be sent only while the 24-hour service window is open.", true);
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const recorder = new MediaRecorder(stream);
+    const chunks = [];
+    recorder.addEventListener("dataavailable", (event) => {
+      if (event.data?.size) chunks.push(event.data);
+    });
+    recorder.addEventListener("stop", async () => {
+      stream.getTracks().forEach((track) => track.stop());
+      const mimeType = recorder.mimeType || "audio/webm";
+      const file = new File(chunks, `voice-note-${Date.now()}.webm`, { type: mimeType });
+      const discard = wa.discardRecording || !state.session || !location.hash.startsWith("#whatsapp");
+      wa.recording = false;
+      wa.discardRecording = false;
+      wa.mediaRecorder = null;
+      wa.mediaStream = null;
+      if (discard) return;
+      renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+      await sendAttachmentFile(file);
+    });
+    recorder.start();
+    wa.recording = true;
+    wa.mediaRecorder = recorder;
+    wa.mediaStream = stream;
+    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+    notify("Recording voice note… click Stop when finished.");
+  } catch (error) {
+    notify(error.message || "Microphone permission was not granted.", true);
+  }
+}
+
+function discardVoiceRecording() {
+  const wa = state.whatsapp;
+  if (!wa?.recording || !wa.mediaRecorder) return;
+  wa.discardRecording = true;
+  wa.mediaStream?.getTracks().forEach((track) => track.stop());
+  if (wa.mediaRecorder.state !== "inactive") wa.mediaRecorder.stop();
+}
+
+async function shareCurrentLocation(buttonEvent) {
+  if (!navigator.geolocation) {
+    notify("Location is not supported by this browser.", true);
+    return;
+  }
+  if (!whatsappWindow().open) {
+    notify("Location can be sent only while the 24-hour service window is open.", true);
+    return;
+  }
+  const button = buttonEvent.currentTarget;
+  button.disabled = true;
+  try {
+    const position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, {
+      enableHighAccuracy: true,
+      timeout: 15000,
+      maximumAge: 60_000
+    }));
+    await api(`/conversations/${encodeURIComponent(state.whatsapp.selectedId)}/messages`, {
+      method: "POST",
+      headers: { "idempotency-key": `${state.whatsapp.selectedId}-location-${Date.now()}` },
+      body: {
+        type: "LOCATION",
+        metadata: {
+          location: {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            name: "Shared by RX Design Hub"
+          }
+        }
+      }
+    });
+    await loadWhatsappConversation(state.whatsapp.selectedId);
+    renderWhatsappPage();
+    notify("Location queued for WhatsApp.");
+  } catch (error) {
+    notify(error.message || "Location permission was not granted.", true);
+  } finally {
+    if (document.body.contains(button)) button.disabled = false;
+  }
+}
+
+async function shareContactCard(event) {
+  if (!whatsappWindow().open) {
+    notify("Contact cards can be sent only while the 24-hour service window is open.", true);
+    return;
+  }
+  const formattedName = prompt("Contact name to share:");
+  if (!formattedName?.trim()) return;
+  const phone = prompt("Contact phone number with country code:");
+  if (!phone?.trim()) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await api(`/conversations/${encodeURIComponent(state.whatsapp.selectedId)}/messages`, {
+      method: "POST",
+      headers: { "idempotency-key": `${state.whatsapp.selectedId}-contact-${Date.now()}` },
+      body: {
+        type: "CONTACT",
+        metadata: {
+          contacts: [{
+            name: {
+              formatted_name: formattedName.trim(),
+              first_name: formattedName.trim().split(/\s+/)[0]
+            },
+            phones: [{ phone: phone.trim(), type: "CELL" }]
+          }]
+        }
+      }
+    });
+    await loadWhatsappConversation(state.whatsapp.selectedId);
+    renderWhatsappPage();
+    notify("Contact card queued for WhatsApp.");
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    if (document.body.contains(button)) button.disabled = false;
+  }
+}
+
+async function sendInteractiveButtons(event) {
+  if (!whatsappWindow().open) {
+    notify("Interactive buttons can be sent only while the 24-hour service window is open.", true);
+    return;
+  }
+  const bodyText = prompt("Question or action text:");
+  if (!bodyText?.trim()) return;
+  const labels = prompt("Button labels, separated by commas (maximum 3):", "Yes, No");
+  const titles = String(labels || "").split(",").map((item) => item.trim().slice(0, 20)).filter(Boolean).slice(0, 3);
+  if (!titles.length) return;
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    await api(`/conversations/${encodeURIComponent(state.whatsapp.selectedId)}/messages`, {
+      method: "POST",
+      headers: { "idempotency-key": `${state.whatsapp.selectedId}-buttons-${Date.now()}` },
+      body: {
+        type: "INTERACTIVE",
+        text: bodyText.trim(),
+        metadata: {
+          interactive: {
+            type: "button",
+            body: { text: bodyText.trim() },
+            action: {
+              buttons: titles.map((title, index) => ({
+                type: "reply",
+                reply: { id: `rx_action_${Date.now()}_${index + 1}`, title }
+              }))
+            }
+          }
+        }
+      }
+    });
+    await loadWhatsappConversation(state.whatsapp.selectedId);
+    renderWhatsappPage();
+    notify("Interactive action queued for WhatsApp.");
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    if (document.body.contains(button)) button.disabled = false;
+  }
+}
+
+async function addInternalNote() {
+  const note = prompt("Internal note (customer will not see this):");
+  if (!note?.trim()) return;
+  try {
+    await api(`/conversations/${encodeURIComponent(state.whatsapp.selectedId)}/internal-note`, {
+      method: "POST",
+      body: { note: note.trim() }
+    });
+    await loadWhatsappConversation(state.whatsapp.selectedId);
+    renderWhatsappPage();
+    notify("Internal note added.");
+  } catch (error) {
+    notify(error.message, true);
+  }
+}
+
+async function sendReaction(messageId, emoji, button) {
+  if (!whatsappWindow().open) {
+    notify("Reactions can be sent only while the 24-hour service window is open.", true);
+    return;
+  }
+  button.disabled = true;
+  try {
+    await api(`/conversations/${encodeURIComponent(state.whatsapp.selectedId)}/messages`, {
+      method: "POST",
+      headers: { "idempotency-key": `${state.whatsapp.selectedId}-reaction-${messageId}-${emoji}-${Date.now()}` },
+      body: { type: "REACTION", text: emoji, replyToMessageId: messageId }
+    });
+    await loadWhatsappConversation(state.whatsapp.selectedId);
+    renderWhatsappPage();
+  } catch (error) {
+    notify(error.message, true);
+  } finally {
+    if (document.body.contains(button)) button.disabled = false;
+  }
+}
+
+async function enableDesktopAlerts() {
+  if (!("Notification" in window)) {
+    notify("Desktop notifications are not supported by this browser.", true);
+    return;
+  }
+  const permission = await Notification.requestPermission();
+  notify(permission === "granted" ? "Desktop WhatsApp alerts enabled." : "Notification permission was not granted.", permission !== "granted");
+}
+
+async function toggleImportantContact() {
+  const contact = state.whatsapp.overview?.contact;
+  if (!contact) return;
+  const tags = new Set(contact.tags || []);
+  if (tags.has("IMPORTANT")) tags.delete("IMPORTANT");
+  else tags.add("IMPORTANT");
+  await updateWhatsappContact({ tags: [...tags] }, tags.has("IMPORTANT") ? "Customer marked Important." : "Important marker removed.");
+}
+
+async function addContactTag() {
+  const tag = prompt("Tag name:");
+  if (!tag?.trim()) return;
+  const contact = state.whatsapp.overview?.contact;
+  const normalized = tag.trim().toUpperCase().replace(/\s+/g, "_").slice(0, 60);
+  await updateWhatsappContact({ tags: [...new Set([...(contact.tags || []), normalized])] }, "Tag added.");
+}
+
+async function removeContactTag(tag) {
+  const contact = state.whatsapp.overview?.contact;
+  await updateWhatsappContact({ tags: (contact.tags || []).filter((item) => item !== tag) }, "Tag removed.");
+}
+
+async function saveCustomerNotes(event) {
+  const button = event.currentTarget;
+  button.disabled = true;
+  await updateWhatsappContact({ notes: document.querySelector("#wa-customer-notes")?.value || "" }, "Customer notes saved.");
+}
+
+async function updateWhatsappContact(patch, successMessage) {
+  const contact = state.whatsapp.overview?.contact;
+  if (!contact) return;
+  try {
+    const { data } = await api(`/contacts/${encodeURIComponent(contact.contactId)}`, {
+      method: "PATCH",
+      body: patch
+    });
+    state.whatsapp.overview.contact = data;
+    const conversation = selectedConversation();
+    if (conversation) conversation.contact = { ...(conversation.contact || {}), ...data };
+    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+    notify(successMessage);
+  } catch (error) {
+    notify(error.message, true);
+  }
+}
+
+async function assignConversation(event) {
+  const select = event.currentTarget;
+  select.disabled = true;
+  try {
+    const { data } = await api(`/conversations/${encodeURIComponent(state.whatsapp.selectedId)}/assign`, {
+      method: "POST",
+      body: { assignedTo: select.value || null }
+    });
+    Object.assign(selectedConversation(), data);
+    if (state.whatsapp.overview?.contact) state.whatsapp.overview.contact.assignedTo = data.assignedTo;
+    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+    notify("Conversation owner updated.");
+  } catch (error) {
+    notify(error.message, true);
+    select.disabled = false;
+  }
+}
+
+async function createWhatsappFollowup(event) {
+  const button = event.currentTarget;
+  const dueAt = document.querySelector("#wa-followup-at")?.value;
+  const notes = document.querySelector("#wa-followup-note")?.value.trim() || "";
+  if (!dueAt) {
+    notify("Select a follow-up date and time.", true);
+    return;
+  }
+  button.disabled = true;
+  try {
+    await api("/followups", {
+      method: "POST",
+      body: {
+        contactId: state.whatsapp.overview.contact.contactId,
+        conversationId: state.whatsapp.selectedId,
+        assignedTo: selectedConversation()?.assignedTo || null,
+        dueAt: new Date(dueAt).toISOString(),
+        type: "MESSAGE",
+        notes
+      }
+    });
+    const { data } = await api(`/contacts/${encodeURIComponent(state.whatsapp.overview.contact.contactId)}/overview`);
+    state.whatsapp.overview = data;
+    renderWhatsappPage();
+    notify("Follow-up scheduled.");
+  } catch (error) {
+    notify(error.message, true);
+    button.disabled = false;
   }
 }
 
@@ -494,22 +1050,42 @@ function stopWhatsappPolling() {
 async function pollWhatsapp() {
   const wa = state.whatsapp;
   if (!location.hash.startsWith("#whatsapp")) return;
-  if (document.hidden) return startWhatsappPolling();
+  const previousUnread = new Map(wa.conversations.map((item) => [conversationId(item), Number(item.unreadCount || 0)]));
   const draft = document.querySelector("#wa-message-input")?.value || "";
   try {
     const from = new Date(Math.max(0, Number(wa.syncedAt || Date.now()) - 1500)).toISOString();
     const { data } = await api(`/conversations?limit=100&from=${encodeURIComponent(from)}&sortBy=updatedAt&sortOrder=asc`);
     const whatsappUpdates = data.filter((item) => item.currentChannel === "WHATSAPP");
     const selectedChanged = whatsappUpdates.some((item) => conversationId(item) === wa.selectedId);
+    const newlyUnread = whatsappUpdates.filter((item) => Number(item.unreadCount || 0) > Number(previousUnread.get(conversationId(item)) || 0));
     wa.conversations = mergeById(wa.conversations, whatsappUpdates, "conversationId").sort((a, b) => (asDate(b.lastMessageAt)?.getTime() || 0) - (asDate(a.lastMessageAt)?.getTime() || 0));
     wa.syncedAt = Date.now();
     if (selectedChanged) await loadWhatsappConversation(wa.selectedId, { incremental: true });
-    if (whatsappUpdates.length || selectedChanged) renderWhatsappPage(draft);
+    if (!document.hidden && (whatsappUpdates.length || selectedChanged)) renderWhatsappPage(draft);
+    if (newlyUnread.length) showInboundNotification(newlyUnread[0]);
   } catch (error) {
     console.warn("WhatsApp inbox refresh failed", error);
   } finally {
     startWhatsappPolling();
   }
+}
+
+function showInboundNotification(conversation) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const contact = conversation.contact || {};
+  const name = contact.companyName || contact.contactPerson || contact.primaryPhone || "WhatsApp customer";
+  const key = `${conversationId(conversation)}:${asDate(conversation.lastMessageAt)?.getTime() || 0}`;
+  if (state.whatsapp.lastNotificationKey === key) return;
+  state.whatsapp.lastNotificationKey = key;
+  const notification = new Notification(`New WhatsApp message · ${name}`, {
+    body: conversation.lastMessagePreview || "Open CRM to reply",
+    tag: conversationId(conversation)
+  });
+  notification.addEventListener("click", () => {
+    window.focus();
+    location.hash = `#whatsapp/${conversationId(conversation)}`;
+    notification.close();
+  });
 }
 
 function prefillUtilityValues(force) {
@@ -555,7 +1131,33 @@ function shortTime(value) { const parsed = asDate(value); return parsed ? new In
 function asDate(value) { if (!value) return null; if (value._seconds) return new Date(value._seconds * 1000); const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? null : parsed; }
 function compactDuration(ms) { const hours = Math.floor(ms / 3_600_000); const minutes = Math.max(0, Math.floor((ms % 3_600_000) / 60_000)); return `${hours}h ${minutes}m left`; }
 function mergeById(current, incoming, field) { const map = new Map(current.map((item) => [item[field] || item.id, item])); incoming.forEach((item) => map.set(item[field] || item.id, { ...(map.get(item[field] || item.id) || {}), ...item })); return [...map.values()]; }
-function freshWhatsappState() { return { conversations: [], messages: [], templates: [], selectedId: null, overview: null, filter: "ALL", search: "", mode: "TEXT", templateId: null, templateValues: {}, selectedOrderId: null, syncedAt: null, timer: null }; }
+function freshWhatsappState() {
+  return {
+    conversations: [],
+    messages: [],
+    templates: [],
+    quickReplies: [],
+    users: [],
+    capabilities: null,
+    clientPanelOpen: false,
+    selectedId: null,
+    overview: null,
+    filter: "ALL",
+    search: "",
+    mode: "TEXT",
+    templateId: null,
+    templateValues: {},
+    selectedOrderId: null,
+    replyToMessageId: null,
+    recording: false,
+    discardRecording: false,
+    mediaRecorder: null,
+    mediaStream: null,
+    lastNotificationKey: null,
+    syncedAt: null,
+    timer: null
+  };
+}
 function freshMarketingState() {
   return {
     contacts: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
@@ -1311,6 +1913,18 @@ function dateTime(value) {
 function pretty(value) { return String(value || "").replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase()); }
 function initials(value) { return String(value || "RX").split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase(); }
 function esc(value) { return String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]); }
+function linkify(value) {
+  const text = String(value ?? "");
+  const pattern = /https?:\/\/[^\s<>"']+/gi;
+  let result = "";
+  let lastIndex = 0;
+  for (const match of text.matchAll(pattern)) {
+    result += esc(text.slice(lastIndex, match.index));
+    result += `<a href="${attr(match[0])}" target="_blank" rel="noopener noreferrer">${esc(match[0])}</a>`;
+    lastIndex = match.index + match[0].length;
+  }
+  return result + esc(text.slice(lastIndex));
+}
 function attr(value) { return esc(value); }
 function notify(message, error = false) { toast.textContent = message; toast.className = `toast${error ? " error" : ""}`; toast.hidden = false; clearTimeout(notify.timer); notify.timer = setTimeout(() => { toast.hidden = true; }, 5000); }
 function readApiError(payload) { return payload.error?.message || payload.message || "Login failed. Please try again."; }
