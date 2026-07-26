@@ -203,6 +203,8 @@ tbody tr { cursor: pointer; transition: background .15s; } tbody tr:hover { back
 .wa-bubble p a { color: #1769aa; text-decoration: underline; overflow-wrap: anywhere; }
 .wa-bubble > span { display: block; margin-top: 3px; color: #82908e; text-align: right; font-size: 8px; }
 .wa-bubble em { position: absolute; top: -7px; right: 8px; padding: 2px 5px; border-radius: 4px; color: #7e641e; background: #fff0b6; font-size: 7px; font-style: normal; font-weight: 900; }
+.wa-message-error { display: grid; gap: 4px; margin-top: 7px; padding: 7px 8px; border-radius: 7px; color: #9b3443; background: #ffeaed; font-size: 8px; }
+.wa-message-error strong, .wa-message-error span { display: block; text-align: left; }.wa-message-error button { width: fit-content; padding: 4px 7px; border: 0; border-radius: 6px; color: white; background: #b83f50; cursor: pointer; font-size: 8px; font-weight: 800; }
 .wa-message-actions { position: absolute; z-index: 2; top: -12px; right: 4px; display: none; gap: 3px; padding: 2px; border: 1px solid #e2e7e5; border-radius: 999px; background: white; box-shadow: 0 3px 12px rgba(22,38,50,.13); }
 .wa-message-row.inbound .wa-message-actions { right: auto; left: 4px; }
 .wa-bubble:hover .wa-message-actions, .wa-bubble:focus-within .wa-message-actions { display: flex; }
@@ -251,7 +253,10 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .wa-template-preview { margin: 8px 0; padding: 8px 10px; border-left: 3px solid #27aa88; border-radius: 7px; background: #ebf8f4; }
 .wa-template-preview span { color: #27846e; font-size: 7px; font-weight: 900; letter-spacing: .08em; }
 .wa-template-preview p { margin: 4px 0 0; color: #40504f; font-size: 9px; line-height: 1.35; }
-.wa-send-template { width: 100%; }
+.wa-template-warning { margin: 8px 0; padding: 10px; border-radius: 8px; color: #8a5a12; background: #fff1d2; font-size: 9px; line-height: 1.45; }
+.wa-template-actions { display: grid; grid-template-columns: auto minmax(180px, 1fr); gap: 7px; }
+.wa-sync-templates { min-height: 40px; padding: 0 12px; border: 1px solid #b9d9d0; border-radius: 11px; color: #176f5c; background: white; cursor: pointer; font-size: 9px; font-weight: 800; }
+.wa-send-template { width: 100%; }.wa-send-template:disabled { opacity: .45; cursor: not-allowed; }
 .wa-order-panel { min-width: 0; overflow: auto; border-left: 1px solid #e4e8ed; background: #f8fafc; }
 .wa-client-card { position: relative; padding: 18px; border-bottom: 1px solid #e5e9ee; background: white; }
 .wa-panel-close { display: none; position: absolute; top: 10px; right: 10px; width: 28px; height: 28px; border: 0; border-radius: 50%; color: #647286; background: #eef1f5; cursor: pointer; font-size: 18px; }
@@ -421,6 +426,7 @@ img.wa-media, video.wa-media { object-fit: cover; }
   .wa-composer-toolbar { padding-bottom: 2px; }
   .wa-bubble { max-width: 88%; }
   .wa-template-row, .wa-template-fields { grid-template-columns: 1fr; }
+  .wa-template-actions { grid-template-columns: 1fr; }
   .marketing-metrics { grid-template-columns: repeat(2, 1fr); }
   .template-summary, .template-status-grid { grid-template-columns: 1fr 1fr; }
   .consent-toolbar { align-items: stretch; flex-direction: column; }.consent-toolbar label { min-width: 0; }

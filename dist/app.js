@@ -336,6 +336,7 @@ function waComposer(windowStatus, draftText) {
   const template = selectedUtilityTemplate();
   const useText = wa.mode === "TEXT" && windowStatus.open;
   const quoted = wa.messages.find((item) => item.messageId === wa.replyToMessageId);
+  const approvedTemplateAvailable = wa.templates.some((item) => item.approved !== false);
   return `<div class="wa-composer">
     <div class="wa-compose-tabs">
       <button class="${useText ? "active" : ""}" data-wa-mode="TEXT" ${windowStatus.open ? "" : "disabled"}>Reply</button>
@@ -356,11 +357,13 @@ function waComposer(windowStatus, draftText) {
         <div class="wa-input-row"><textarea id="wa-message-input" rows="1" maxlength="4096" placeholder="Type a message or / shortcut…">${esc(draftText)}</textarea><button class="wa-send-button" type="submit">Send</button></div>
       </form>` : `
       <form id="wa-composer-form" class="wa-template-composer">
-        <div class="wa-template-row"><label>Approved Utility template<select id="wa-template-select">${wa.templates.map((item) => `<option value="${attr(item.id)}" ${item.id === template?.id ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></label>
+        <div class="wa-template-row"><label>Approved Utility template<select id="wa-template-select" ${approvedTemplateAvailable ? "" : "disabled"}>${wa.templates.map((item) => `<option value="${attr(item.id)}" ${item.id === template?.id ? "selected" : ""} ${item.approved === false ? "disabled" : ""}>${esc(item.label)} · ${esc(pretty(item.approvalStatus || "Approved"))}</option>`).join("")}</select></label>
           <label>Related order<select id="wa-template-order"><option value="">Select order</option>${(wa.overview?.orders || []).map((order) => `<option value="${attr(order.orderId)}" ${order.orderId === wa.selectedOrderId ? "selected" : ""}>${esc(orderReference(order))} · ${esc(pretty(order.status))}</option>`).join("")}</select></label></div>
-        <div class="wa-template-fields">${(template?.variables || []).map((field) => `<label>${esc(field.label)}<input data-template-field="${attr(field.key)}" value="${attr(wa.templateValues[field.key] || "")}" required /></label>`).join("")}</div>
-        <div class="wa-template-preview"><span>UTILITY PREVIEW</span><p>${esc(renderUtilityPreview(template, wa.templateValues))}</p></div>
-        <button class="wa-send-template" type="submit">Send Utility update</button>
+        ${approvedTemplateAvailable
+          ? `<div class="wa-template-fields">${(template?.variables || []).map((field) => `<label>${esc(field.label)}<input data-template-field="${attr(field.key)}" value="${attr(wa.templateValues[field.key] || "")}" required /></label>`).join("")}</div>
+            <div class="wa-template-preview"><span>UTILITY PREVIEW</span><p>${esc(renderUtilityPreview(template, wa.templateValues))}</p></div>`
+          : '<div class="wa-template-warning">No approved Utility template is synced. Sync Meta templates, then try again.</div>'}
+        <div class="wa-template-actions"><button class="wa-sync-templates" id="wa-sync-templates" type="button">Sync Meta templates</button><button class="wa-send-template" type="submit" ${approvedTemplateAvailable ? "" : "disabled"}>Send Utility update</button></div>
       </form>`}
   </div>`;
 }
@@ -435,6 +438,7 @@ function waMessage(message) {
       ${body}
       <span>${esc(shortTime(message.createdAt))}${status ? ` · ${status}` : ""}</span>
       ${message.type === "TEMPLATE" ? `<em>${esc(pretty(message.metadata?.templateCategory || "TEMPLATE"))}</em>` : ""}
+      ${message.status === "FAILED" ? `<div class="wa-message-error"><strong>Send failed</strong><span>${esc(message.errorMessage || message.errorCode || "WhatsApp rejected this message.")}</span><button data-retry-message="${attr(message.messageId)}" type="button">Retry</button></div>` : ""}
       ${!internal && message.type !== "REACTION" ? `<div class="wa-message-actions"><button data-reply-message="${attr(message.messageId)}" type="button" title="Reply">↩</button><button data-react-message="${attr(message.messageId)}" data-react-emoji="👍" type="button" title="React">👍</button></div>` : ""}
     </div>
   </div>`;
@@ -497,6 +501,7 @@ function bindWhatsappEvents() {
     prefillUtilityValues(true);
     renderWhatsappPage();
   });
+  document.querySelector("#wa-sync-templates")?.addEventListener("click", syncUtilityTemplates);
   document.querySelector("#wa-template-order")?.addEventListener("change", (event) => {
     state.whatsapp.selectedOrderId = event.target.value || null;
     state.whatsapp.templateValues = {};
@@ -539,6 +544,9 @@ function bindWhatsappEvents() {
   document.querySelectorAll("[data-react-message]").forEach((button) => button.addEventListener("click", () => {
     sendReaction(button.dataset.reactMessage, button.dataset.reactEmoji, button);
   }));
+  document.querySelectorAll("[data-retry-message]").forEach((button) => button.addEventListener("click", () => {
+    retryWhatsappMessage(button.dataset.retryMessage, button);
+  }));
   document.querySelector("#wa-assignee")?.addEventListener("change", assignConversation);
   document.querySelector("#wa-add-tag")?.addEventListener("click", addContactTag);
   document.querySelectorAll("[data-remove-tag]").forEach((button) => button.addEventListener("click", () => removeContactTag(button.dataset.removeTag)));
@@ -580,14 +588,21 @@ async function sendWhatsappMessage(event) {
       if (!text) return;
       body = { type: "TEXT", text, replyToMessageId: wa.replyToMessageId || null };
     } else {
+      if (!selectedUtilityTemplate()) throw new Error("Sync and select an approved Utility template first.");
+      if (!wa.selectedOrderId) throw new Error("Select the related CRM order before sending this Utility update.");
       document.querySelectorAll("[data-template-field]").forEach((input) => { wa.templateValues[input.dataset.templateField] = input.value.trim(); });
       body = { type: "TEMPLATE", utilityTemplateId: selectedUtilityTemplate()?.id, templateVariables: wa.templateValues };
     }
-    await api(`/conversations/${encodeURIComponent(wa.selectedId)}/messages`, {
+    const { data: sendResult } = await api(`/conversations/${encodeURIComponent(wa.selectedId)}/messages`, {
       method: "POST",
       headers: { "idempotency-key": `${wa.selectedId}-${Date.now()}-${Math.random().toString(36).slice(2)}` },
-      body
+      body: body.type === "TEMPLATE"
+        ? { ...body, templateVariables: { ...body.templateVariables, order_id: wa.selectedOrderId || "" } }
+        : body
     });
+    if (sendResult?.queued !== true && sendResult?.sent !== true) {
+      throw new Error(policyFailureMessage(sendResult?.reason));
+    }
     wa.replyToMessageId = null;
     await loadWhatsappConversation(wa.selectedId);
     renderWhatsappPage();
@@ -595,6 +610,41 @@ async function sendWhatsappMessage(event) {
   } catch (error) {
     notify(error.message, true);
   } finally {
+    if (document.body.contains(button)) button.disabled = false;
+  }
+}
+
+async function syncUtilityTemplates(event) {
+  const button = event.currentTarget;
+  button.disabled = true;
+  button.textContent = "Syncing…";
+  try {
+    await api("/whatsapp/templates/sync", { method: "POST", body: {} });
+    const { data } = await api("/whatsapp/utility-templates");
+    state.whatsapp.templates = data || [];
+    state.whatsapp.templateId = null;
+    state.whatsapp.templateValues = {};
+    prefillUtilityValues(true);
+    renderWhatsappPage();
+    notify(state.whatsapp.templates.some((item) => item.approved) ? "Approved Meta templates synced." : "Sync completed, but no configured Utility template is Approved.", !state.whatsapp.templates.some((item) => item.approved));
+  } catch (error) {
+    notify(error.message, true);
+    if (document.body.contains(button)) {
+      button.disabled = false;
+      button.textContent = "Sync Meta templates";
+    }
+  }
+}
+
+async function retryWhatsappMessage(messageId, button) {
+  button.disabled = true;
+  try {
+    await api(`/messages/${encodeURIComponent(messageId)}/retry`, { method: "POST", body: {} });
+    await loadWhatsappConversation(state.whatsapp.selectedId);
+    renderWhatsappPage();
+    notify("Message queued for retry.");
+  } catch (error) {
+    notify(error.message, true);
     if (document.body.contains(button)) button.disabled = false;
   }
 }
@@ -1090,7 +1140,8 @@ function showInboundNotification(conversation) {
 
 function prefillUtilityValues(force) {
   const wa = state.whatsapp;
-  if (!wa.templateId) wa.templateId = wa.templates[0]?.id || null;
+  const available = wa.templates.filter((item) => item.approved !== false);
+  if (!wa.templateId || !available.some((item) => item.id === wa.templateId)) wa.templateId = available[0]?.id || null;
   const template = selectedUtilityTemplate();
   if (!template) return;
   const contact = wa.overview?.contact || selectedConversation()?.contact || {};
@@ -1119,7 +1170,10 @@ function whatsappWindow() {
 }
 
 function selectedConversation() { return state.whatsapp.conversations.find((item) => conversationId(item) === state.whatsapp.selectedId) || null; }
-function selectedUtilityTemplate() { return state.whatsapp.templates.find((item) => item.id === state.whatsapp.templateId) || state.whatsapp.templates[0] || null; }
+function selectedUtilityTemplate() {
+  const available = state.whatsapp.templates.filter((item) => item.approved !== false);
+  return available.find((item) => item.id === state.whatsapp.templateId) || available[0] || null;
+}
 function conversationId(item) { return item?.conversationId || item?.id || null; }
 function waFilterButton(value, label) { return `<button data-wa-filter="${value}" class="${state.whatsapp.filter === value ? "active" : ""}">${label}</button>`; }
 function orderReference(order) { return order.orderNumber || `ORD-${String(order.orderId || "").slice(-8).toUpperCase()}`; }
@@ -1924,6 +1978,15 @@ function linkify(value) {
     lastIndex = match.index + match[0].length;
   }
   return result + esc(text.slice(lastIndex));
+}
+function policyFailureMessage(reason) {
+  const value = String(reason || "MESSAGE_NOT_QUEUED");
+  if (value === "TRANSACTION_RECORD_NOT_VERIFIED") return "Selected order could not be verified. Select the linked order and try again.";
+  if (value.startsWith("MISSING_TRANSACTION_DATA")) return "This Utility template needs a linked order and all required details.";
+  if (value.startsWith("TEMPLATE_NOT_APPROVED")) return value.replace(/^TEMPLATE_NOT_APPROVED:/, "").trim();
+  if (value === "DUPLICATE_SEND_BLOCKED") return "This update was already queued. Refresh the chat before sending again.";
+  if (value === "SERVICE_WINDOW_CLOSED") return "The service window is closed. Use an approved Utility template.";
+  return pretty(value);
 }
 function attr(value) { return esc(value); }
 function notify(message, error = false) { toast.textContent = message; toast.className = `toast${error ? " error" : ""}`; toast.hidden = false; clearTimeout(notify.timer); notify.timer = setTimeout(() => { toast.hidden = true; }, 5000); }
