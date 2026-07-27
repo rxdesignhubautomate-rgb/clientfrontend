@@ -98,6 +98,7 @@ function logout() {
   discardVoiceRecording();
   closeImageViewer();
   releaseMediaObjectUrls();
+  document.body.classList.remove("whatsapp-route");
   localStorage.removeItem(authKey);
   state.session = null;
   state.importPayload = null;
@@ -193,6 +194,7 @@ async function renderRoute() {
   document.querySelector(".sidebar").classList.remove("open");
   const route = (location.hash.replace(/^#/, "") || "dashboard").split("/");
   const base = route[0];
+  document.body.classList.toggle("whatsapp-route", base === "whatsapp");
   if (base !== "whatsapp") {
     discardVoiceRecording();
     closeImageViewer();
