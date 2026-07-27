@@ -1,5 +1,10 @@
+import { createChatCache } from "./chat-cache.js";
+
 const config = window.__CRM_CONFIG__ || {};
 const authKey = "rx-crm-session-v1";
+const WHATSAPP_POLL_INTERVAL_MS = 5_000;
+const WHATSAPP_SYNC_OVERLAP_MS = 2_000;
+const WHATSAPP_FULL_SYNC_AFTER_MS = 6 * 60 * 60 * 1000;
 const state = {
   session: readSession(),
   importPayload: null,
@@ -18,6 +23,7 @@ document.querySelector("#login-form").addEventListener("submit", login);
 document.querySelector("#logout-button").addEventListener("click", logout);
 document.querySelector("#menu-button").addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
 window.addEventListener("hashchange", renderRoute);
+document.addEventListener("visibilitychange", resumeWhatsappPolling);
 
 if (state.session?.accessToken) boot();
 else {
@@ -90,6 +96,7 @@ function showLogin() {
 function logout() {
   stopWhatsappPolling();
   discardVoiceRecording();
+  closeImageViewer();
   releaseMediaObjectUrls();
   localStorage.removeItem(authKey);
   state.session = null;
@@ -186,7 +193,10 @@ async function renderRoute() {
   document.querySelector(".sidebar").classList.remove("open");
   const route = (location.hash.replace(/^#/, "") || "dashboard").split("/");
   const base = route[0];
-  if (base !== "whatsapp") discardVoiceRecording();
+  if (base !== "whatsapp") {
+    discardVoiceRecording();
+    closeImageViewer();
+  }
   if (["import", "marketing"].includes(base) && !["OWNER", "ADMIN"].includes(state.session?.role)) {
     location.hash = "#dashboard";
     return;
@@ -232,27 +242,94 @@ async function renderDashboard() {
 async function renderWhatsapp(requestedConversationId) {
   pageTitle.textContent = "WhatsApp Inbox";
   const wa = state.whatsapp;
+  wa.cache ||= createChatCache(state.session?.email);
+  await hydrateWhatsappCache(requestedConversationId);
+  if (wa.conversations.length) renderWhatsappPage();
+
   const syncStartedAt = Date.now();
-  const [conversationResult, templateResult, quickReplyResult, usersResult, capabilitiesResult] = await Promise.all([
-    api("/conversations?limit=100&sortBy=lastMessageAt&sortOrder=desc"),
-    wa.templates.length ? Promise.resolve({ data: wa.templates }) : api("/whatsapp/utility-templates"),
-    wa.quickReplies.length ? Promise.resolve({ data: wa.quickReplies }) : optionalInboxApi("/whatsapp/quick-replies?limit=100", []),
-    wa.users.length ? Promise.resolve({ data: wa.users }) : optionalInboxApi("/users?limit=100", []),
-    wa.capabilities ? Promise.resolve({ data: wa.capabilities }) : optionalInboxApi("/whatsapp/capabilities", null)
-  ]);
-  wa.conversations = conversationResult.data.filter((item) => item.currentChannel === "WHATSAPP");
+  const checkpointIsFresh = wa.syncedAt && syncStartedAt - Number(wa.syncedAt) < WHATSAPP_FULL_SYNC_AFTER_MS;
+  const conversationQuery = checkpointIsFresh
+    ? `/conversations?limit=100&from=${encodeURIComponent(new Date(Math.max(0, Number(wa.syncedAt) - WHATSAPP_SYNC_OVERLAP_MS)).toISOString())}&sortBy=updatedAt&sortOrder=asc`
+    : "/conversations?limit=100&sortBy=lastMessageAt&sortOrder=desc";
+  let networkResults;
+  try {
+    networkResults = await Promise.all([
+      api(conversationQuery),
+      wa.templates.length ? Promise.resolve({ data: wa.templates }) : api("/whatsapp/utility-templates"),
+      wa.quickReplies.length ? Promise.resolve({ data: wa.quickReplies }) : optionalInboxApi("/whatsapp/quick-replies?limit=100", []),
+      wa.users.length ? Promise.resolve({ data: wa.users }) : optionalInboxApi("/users?limit=100", []),
+      wa.capabilities ? Promise.resolve({ data: wa.capabilities }) : optionalInboxApi("/whatsapp/capabilities", null)
+    ]);
+  } catch (error) {
+    if (!wa.conversations.length) throw error;
+    wa.syncState = "offline";
+    console.warn("Showing locally cached WhatsApp inbox while sync is unavailable", error);
+    updateWhatsappSyncBadge();
+    startWhatsappPolling();
+    return;
+  }
+  const [conversationResult, templateResult, quickReplyResult, usersResult, capabilitiesResult] = networkResults;
+  const conversationUpdates = conversationResult.data.filter((item) => item.currentChannel === "WHATSAPP");
+  wa.conversations = sortWhatsappConversations(
+    checkpointIsFresh ? mergeById(wa.conversations, conversationUpdates, "conversationId") : conversationUpdates
+  );
   wa.templates = templateResult.data;
   wa.quickReplies = quickReplyResult.data || [];
   wa.users = (usersResult.data || []).filter((item) => item.active !== false);
   wa.capabilities = capabilitiesResult.data || null;
+  wa.syncState = "live";
   wa.selectedId = requestedConversationId || wa.selectedId || conversationId(wa.conversations[0]);
   if (wa.selectedId && !wa.conversations.some((item) => conversationId(item) === wa.selectedId)) {
     wa.selectedId = conversationId(wa.conversations[0]);
   }
-  if (wa.selectedId) await loadWhatsappConversation(wa.selectedId);
-  wa.syncedAt = syncStartedAt;
+  if (wa.selectedId) {
+    const useIncrementalMessages = wa.messagesConversationId === wa.selectedId && wa.messages.length > 0;
+    const incoming = await loadWhatsappConversation(wa.selectedId, { incremental: useIncrementalMessages });
+    await refreshChangedMessageMarkers(conversationUpdates, new Set(incoming.map((item) => item.messageId || item.id)));
+  }
+  wa.syncedAt = serverSyncTime(conversationResult, syncStartedAt);
+  await Promise.all([
+    chatCacheCall(wa.cache, "putConversations", wa.conversations),
+    chatCacheCall(wa.cache, "setMeta", "conversationSyncAt", wa.syncedAt)
+  ]);
   renderWhatsappPage();
   startWhatsappPolling();
+}
+
+async function hydrateWhatsappCache(requestedConversationId) {
+  const wa = state.whatsapp;
+  if (!wa.cacheHydrated) {
+    const [cachedConversations, cachedSyncAt] = await Promise.all([
+      chatCacheCall(wa.cache, "getConversations"),
+      chatCacheCall(wa.cache, "getMeta", "conversationSyncAt")
+    ]);
+    if (cachedConversations?.length) {
+      wa.conversations = sortWhatsappConversations(mergeById(wa.conversations, cachedConversations, "conversationId"));
+      wa.syncState = "cached";
+    }
+    if (cachedSyncAt) wa.syncedAt = Number(cachedSyncAt) || asDate(cachedSyncAt)?.getTime() || null;
+    wa.cacheHydrated = true;
+  }
+  const selectedId = requestedConversationId || wa.selectedId || conversationId(wa.conversations[0]);
+  if (!selectedId || !wa.conversations.some((item) => conversationId(item) === selectedId)) return;
+  wa.selectedId = selectedId;
+  if (wa.messagesConversationId !== selectedId) await loadCachedWhatsappConversation(selectedId);
+}
+
+async function loadCachedWhatsappConversation(id) {
+  const wa = state.whatsapp;
+  const selected = wa.conversations.find((item) => conversationId(item) === id);
+  if (!selected) return;
+  const [messages, cachedOverview] = await Promise.all([
+    chatCacheCall(wa.cache, "getMessages", id),
+    chatCacheCall(wa.cache, "getOverview", selected.contactId)
+  ]);
+  wa.messages = messages || [];
+  wa.messagesConversationId = id;
+  wa.overview = cachedOverview?.value || null;
+  wa.overviewCachedAt = asDate(cachedOverview?.cachedAt)?.getTime() || 0;
+  wa.selectedId = id;
+  selectDefaultWhatsappOrder();
 }
 
 async function optionalInboxApi(path, fallback) {
@@ -267,37 +344,61 @@ async function optionalInboxApi(path, fallback) {
 async function loadWhatsappConversation(id, { incremental = false } = {}) {
   const wa = state.whatsapp;
   const selected = wa.conversations.find((item) => conversationId(item) === id);
-  if (!selected) return;
-  const query = new URLSearchParams({ limit: "100", sortOrder: incremental ? "asc" : "desc" });
-  if (incremental && wa.messages.length) {
+  if (!selected) return [];
+  const sameConversation = wa.messagesConversationId === id;
+  if (!sameConversation) {
+    wa.messages = [];
+    wa.overview = null;
+    wa.overviewCachedAt = 0;
+  }
+  const hasBaseline = incremental && sameConversation && wa.messages.length > 0;
+  const query = new URLSearchParams({ limit: "100", sortOrder: hasBaseline ? "asc" : "desc" });
+  if (hasBaseline) {
     const latest = Math.max(...wa.messages.map((item) => asDate(item.createdAt)?.getTime() || 0));
-    if (latest) query.set("from", new Date(Math.max(0, latest - 1000)).toISOString());
+    if (latest) query.set("from", new Date(Math.max(0, latest - WHATSAPP_SYNC_OVERLAP_MS)).toISOString());
   }
   const requests = [api(`/conversations/${encodeURIComponent(id)}/messages?${query}`)];
-  if (!incremental || !wa.overview || wa.overview.contact?.contactId !== selected.contactId) {
+  const overviewIsStale = !wa.overviewCachedAt || Date.now() - wa.overviewCachedAt > 5 * 60 * 1000;
+  if (!wa.overview || wa.overview.contact?.contactId !== selected.contactId || overviewIsStale) {
     requests.push(api(`/contacts/${encodeURIComponent(selected.contactId)}/overview`));
   }
   const [messageResult, overviewResult] = await Promise.all(requests);
-  const incoming = incremental ? messageResult.data : [...messageResult.data].reverse();
-  wa.messages = incremental ? mergeById(wa.messages, incoming, "messageId") : incoming;
-  if (overviewResult) wa.overview = overviewResult.data;
+  const incoming = hasBaseline ? messageResult.data : [...messageResult.data].reverse();
+  wa.messages = (hasBaseline ? mergeById(wa.messages, incoming, "messageId") : incoming)
+    .sort((left, right) => (asDate(left.createdAt)?.getTime() || 0) - (asDate(right.createdAt)?.getTime() || 0));
+  wa.messagesConversationId = id;
+  if (overviewResult) {
+    wa.overview = overviewResult.data;
+    wa.overviewCachedAt = Date.now();
+  }
   wa.selectedId = id;
+  selectDefaultWhatsappOrder();
+  if (!whatsappWindow().open && wa.mode === "TEXT") wa.mode = "TEMPLATE";
+  prefillUtilityValues(false);
+  await Promise.all([
+    chatCacheCall(wa.cache, "putMessages", incoming),
+    overviewResult ? chatCacheCall(wa.cache, "putOverview", selected.contactId, wa.overview) : Promise.resolve()
+  ]);
+  return incoming;
+}
+
+function selectDefaultWhatsappOrder() {
+  const wa = state.whatsapp;
   if (!wa.selectedOrderId || !wa.overview?.orders?.some((order) => order.orderId === wa.selectedOrderId)) {
     wa.selectedOrderId = wa.overview?.orders?.[0]?.orderId || null;
   }
-  if (!whatsappWindow().open && wa.mode === "TEXT") wa.mode = "TEMPLATE";
-  prefillUtilityValues(false);
 }
 
 function renderWhatsappPage(draftText = "") {
   const wa = state.whatsapp;
   const selected = selectedConversation();
+  const syncIndicator = whatsappSyncIndicator();
   releaseMediaObjectUrls();
   page.innerHTML = `
     <div class="wa-page-head">
       <div><h1>WhatsApp Inbox</h1><p>Real-time client chat, media, team ownership and orders in one place.</p></div>
       <div class="wa-page-actions">
-        <span class="wa-api-state ${wa.capabilities?.connected ? "connected" : "disconnected"}">${wa.capabilities?.connected ? "Cloud API connected" : "API setup needed"}</span>
+        <span id="wa-sync-state" class="wa-api-state ${syncIndicator.connected ? "connected" : "disconnected"}">${esc(syncIndicator.label)}</span>
         <button class="button button-secondary" id="wa-enable-alerts" type="button">Enable alerts</button>
         <a class="button button-primary" href="#clients">+ Start client chat</a>
       </div>
@@ -442,7 +543,7 @@ function waConversationList() {
 function waMessage(message) {
   const internal = message.direction === "INTERNAL";
   const outbound = message.direction === "OUTBOUND";
-  const status = outbound ? messageStatus(message.status) : "";
+  const status = outbound ? messageStatusMarkup(message.status) : "";
   const quoted = message.replyTo || (message.replyToMessageId
     ? state.whatsapp.messages.find((item) => item.messageId === message.replyToMessageId)
     : null);
@@ -458,7 +559,7 @@ function waMessage(message) {
     <div class="wa-bubble">
       ${quoted ? `<div class="wa-quoted"><small>${quoted.direction === "INBOUND" ? "Customer" : "RX team"}</small><p>${esc(quoted.text || `[${pretty(quoted.type)}]`)}</p></div>` : ""}
       ${body}
-      <span>${esc(shortTime(message.createdAt))}${status ? ` · ${status}` : ""}</span>
+      <span class="wa-message-meta"><time>${esc(shortTime(message.createdAt))}</time>${status}</span>
       ${message.type === "TEMPLATE" ? `<em>${esc(pretty(message.metadata?.templateCategory || "TEMPLATE"))}</em>` : ""}
       ${message.status === "FAILED" ? `<div class="wa-message-error"><strong>Send failed</strong><span>${esc(message.errorMessage || message.errorCode || "WhatsApp rejected this message.")}</span><button data-retry-message="${attr(message.messageId)}" type="button">Retry</button></div>` : ""}
       ${!internal && message.type !== "REACTION" ? `<div class="wa-message-actions"><button data-reply-message="${attr(message.messageId)}" type="button" title="Reply">↩</button><button data-react-message="${attr(message.messageId)}" data-react-emoji="👍" type="button" title="React">👍</button></div>` : ""}
@@ -472,10 +573,11 @@ function waAttachment(attachment) {
   const name = attachment.originalFilename || "Attachment";
   const id = attachment.attachmentId || attachment.id || "";
   if (!url) return `<div class="wa-attachment-missing">Attachment unavailable</div>`;
-  const actions = `<div class="wa-file-actions"><button data-media-open="${attr(id)}" data-media-name="${attr(name)}" type="button">Open</button><button data-media-download="${attr(id)}" data-media-name="${attr(name)}" type="button">Download</button></div>`;
   if (mime.startsWith("image/")) {
-    return `<div class="wa-attachment-block"><a class="wa-media" data-media-link="${attr(id)}" href="${attr(url)}" target="_blank" rel="noreferrer"><img data-protected-media="${attr(id)}" src="${attr(url)}" alt="${attr(name)}" loading="lazy" /></a>${actions}</div>`;
+    const actions = `<div class="wa-file-actions"><button data-media-preview="${attr(id)}" data-media-name="${attr(name)}" type="button">View</button><button data-media-download="${attr(id)}" data-media-name="${attr(name)}" type="button">Download</button></div>`;
+    return `<div class="wa-attachment-block"><button class="wa-media wa-image-preview" data-media-preview="${attr(id)}" data-media-name="${attr(name)}" type="button" aria-label="View ${attr(name)}"><img data-protected-media="${attr(id)}" src="${attr(url)}" alt="${attr(name)}" loading="lazy" /></button>${actions}</div>`;
   }
+  const actions = `<div class="wa-file-actions"><button data-media-open="${attr(id)}" data-media-name="${attr(name)}" type="button">Open in new tab</button><button data-media-download="${attr(id)}" data-media-name="${attr(name)}" type="button">Download</button></div>`;
   if (mime.startsWith("video/")) {
     return `<div class="wa-attachment-block"><video class="wa-media" data-protected-media="${attr(id)}" src="${attr(url)}" controls preload="metadata"></video>${actions}</div>`;
   }
@@ -565,7 +667,7 @@ function bindWhatsappEvents() {
   document.querySelector("#wa-enable-alerts")?.addEventListener("click", enableDesktopAlerts);
   document.querySelector("#wa-quick-reply")?.addEventListener("change", selectQuickReply);
   document.querySelector("#wa-attachment-input")?.addEventListener("change", sendSelectedAttachment);
-  bindMediaEvents();
+  bindWhatsappMessageEvents();
   document.querySelector("#wa-record-audio")?.addEventListener("click", toggleVoiceRecording);
   document.querySelector("#wa-share-location")?.addEventListener("click", shareCurrentLocation);
   document.querySelector("#wa-share-contact")?.addEventListener("click", shareContactCard);
@@ -575,17 +677,6 @@ function bindWhatsappEvents() {
     state.whatsapp.replyToMessageId = null;
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
   });
-  document.querySelectorAll("[data-reply-message]").forEach((button) => button.addEventListener("click", () => {
-    state.whatsapp.replyToMessageId = button.dataset.replyMessage;
-    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
-    document.querySelector("#wa-message-input")?.focus();
-  }));
-  document.querySelectorAll("[data-react-message]").forEach((button) => button.addEventListener("click", () => {
-    sendReaction(button.dataset.reactMessage, button.dataset.reactEmoji, button);
-  }));
-  document.querySelectorAll("[data-retry-message]").forEach((button) => button.addEventListener("click", () => {
-    retryWhatsappMessage(button.dataset.retryMessage, button);
-  }));
   document.querySelector("#wa-assignee")?.addEventListener("change", assignConversation);
   document.querySelector("#wa-add-tag")?.addEventListener("click", addContactTag);
   document.querySelectorAll("[data-remove-tag]").forEach((button) => button.addEventListener("click", () => removeContactTag(button.dataset.removeTag)));
@@ -608,12 +699,30 @@ function bindWhatsappEvents() {
   }));
 }
 
+function bindWhatsappMessageEvents() {
+  bindMediaEvents();
+  document.querySelectorAll("[data-reply-message]").forEach((button) => button.addEventListener("click", () => {
+    state.whatsapp.replyToMessageId = button.dataset.replyMessage;
+    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
+    document.querySelector("#wa-message-input")?.focus();
+  }));
+  document.querySelectorAll("[data-react-message]").forEach((button) => button.addEventListener("click", () => {
+    sendReaction(button.dataset.reactMessage, button.dataset.reactEmoji, button);
+  }));
+  document.querySelectorAll("[data-retry-message]").forEach((button) => button.addEventListener("click", () => {
+    retryWhatsappMessage(button.dataset.retryMessage, button);
+  }));
+}
+
 function bindMediaEvents() {
   document.querySelectorAll("[data-retry-media]").forEach((button) => button.addEventListener("click", () => {
     retryWhatsappMedia(button.dataset.retryMedia, button);
   }));
   document.querySelectorAll("[data-media-open]").forEach((button) => button.addEventListener("click", () => {
     openProtectedAttachment(button.dataset.mediaOpen, button.dataset.mediaName, button);
+  }));
+  document.querySelectorAll("[data-media-preview]").forEach((button) => button.addEventListener("click", () => {
+    openImageViewer(button.dataset.mediaPreview, button.dataset.mediaName, button);
   }));
   document.querySelectorAll("[data-media-download]").forEach((button) => button.addEventListener("click", () => {
     downloadProtectedAttachment(button.dataset.mediaDownload, button.dataset.mediaName, button);
@@ -628,7 +737,7 @@ async function retryWhatsappMedia(messageId, button) {
   button.textContent = "Recovering…";
   try {
     await api(`/messages/${encodeURIComponent(messageId)}/media/retry`, { method: "POST", body: {} });
-    await loadWhatsappConversation(state.whatsapp.selectedId);
+    await refreshWhatsappMessage(messageId);
     renderWhatsappPage();
     notify("WhatsApp media recovered.");
   } catch (error) {
@@ -649,12 +758,63 @@ async function hydrateProtectedMedia(element) {
     state.whatsapp.mediaObjectUrls.push(objectUrl);
     element.src = objectUrl;
     element.dataset.mediaFallback = "ready";
-    const link = document.querySelector(`[data-media-link="${CSS.escape(element.dataset.protectedMedia)}"]`);
-    if (link) link.href = objectUrl;
   } catch (error) {
     element.dataset.mediaFallback = "failed";
     notify(error.message, true);
   }
+}
+
+async function openImageViewer(attachmentId, filename, button) {
+  closeImageViewer();
+  const viewer = document.createElement("div");
+  viewer.className = "wa-image-viewer";
+  viewer.dataset.imageViewer = "true";
+  viewer.setAttribute("role", "dialog");
+  viewer.setAttribute("aria-modal", "true");
+  viewer.setAttribute("aria-label", filename || "Image preview");
+  viewer.innerHTML = `
+    <header><strong>${esc(filename || "Image")}</strong><button data-image-viewer-close type="button" aria-label="Close image">&times;</button></header>
+    <div class="wa-image-viewer-stage"><span>Loading image&hellip;</span></div>
+    <footer><button data-image-viewer-download type="button">Download</button></footer>`;
+  document.body.appendChild(viewer);
+  document.body.classList.add("wa-viewer-open");
+  viewer.querySelector("[data-image-viewer-close]").addEventListener("click", closeImageViewer);
+  viewer.addEventListener("click", (event) => {
+    if (event.target === viewer) closeImageViewer();
+  });
+  viewer.querySelector("[data-image-viewer-download]").addEventListener("click", (event) => {
+    downloadProtectedAttachment(attachmentId, filename, event.currentTarget);
+  });
+  document.addEventListener("keydown", handleImageViewerKey);
+  if (button) button.disabled = true;
+  try {
+    const blob = await fetchAttachmentBlob(attachmentId);
+    const objectUrl = URL.createObjectURL(blob);
+    if (!viewer.isConnected) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
+    viewer.dataset.objectUrl = objectUrl;
+    viewer.querySelector(".wa-image-viewer-stage").innerHTML = `<img src="${attr(objectUrl)}" alt="${attr(filename || "Image")}" />`;
+    viewer.querySelector("[data-image-viewer-close]").focus();
+  } catch (error) {
+    closeImageViewer();
+    notify(error.message, true);
+  } finally {
+    if (button && document.body.contains(button)) button.disabled = false;
+  }
+}
+
+function closeImageViewer() {
+  const viewer = document.querySelector("[data-image-viewer]");
+  if (viewer?.dataset.objectUrl) URL.revokeObjectURL(viewer.dataset.objectUrl);
+  viewer?.remove();
+  document.body.classList.remove("wa-viewer-open");
+  document.removeEventListener("keydown", handleImageViewerKey);
+}
+
+function handleImageViewerKey(event) {
+  if (event.key === "Escape") closeImageViewer();
 }
 
 async function openProtectedAttachment(attachmentId, filename, button) {
@@ -738,7 +898,7 @@ async function sendWhatsappMessage(event) {
       throw new Error(policyFailureMessage(sendResult?.reason));
     }
     wa.replyToMessageId = null;
-    await loadWhatsappConversation(wa.selectedId);
+    await loadWhatsappConversation(wa.selectedId, { incremental: true });
     renderWhatsappPage();
     notify(body.type === "TEMPLATE" ? "Utility update queued for WhatsApp." : "Message queued for WhatsApp.");
   } catch (error) {
@@ -774,7 +934,7 @@ async function retryWhatsappMessage(messageId, button) {
   button.disabled = true;
   try {
     await api(`/messages/${encodeURIComponent(messageId)}/retry`, { method: "POST", body: {} });
-    await loadWhatsappConversation(state.whatsapp.selectedId);
+    await refreshWhatsappMessage(messageId);
     renderWhatsappPage();
     notify("Message queued for retry.");
   } catch (error) {
@@ -850,7 +1010,7 @@ async function sendAttachmentFile(file, caption = "") {
       }
     });
     wa.replyToMessageId = null;
-    await loadWhatsappConversation(wa.selectedId);
+    await loadWhatsappConversation(wa.selectedId, { incremental: true });
     renderWhatsappPage();
     notify(`${pretty(kind)} queued for WhatsApp.`);
   } catch (error) {
@@ -950,7 +1110,7 @@ async function shareCurrentLocation(buttonEvent) {
         }
       }
     });
-    await loadWhatsappConversation(state.whatsapp.selectedId);
+    await loadWhatsappConversation(state.whatsapp.selectedId, { incremental: true });
     renderWhatsappPage();
     notify("Location queued for WhatsApp.");
   } catch (error) {
@@ -988,7 +1148,7 @@ async function shareContactCard(event) {
         }
       }
     });
-    await loadWhatsappConversation(state.whatsapp.selectedId);
+    await loadWhatsappConversation(state.whatsapp.selectedId, { incremental: true });
     renderWhatsappPage();
     notify("Contact card queued for WhatsApp.");
   } catch (error) {
@@ -1031,7 +1191,7 @@ async function sendInteractiveButtons(event) {
         }
       }
     });
-    await loadWhatsappConversation(state.whatsapp.selectedId);
+    await loadWhatsappConversation(state.whatsapp.selectedId, { incremental: true });
     renderWhatsappPage();
     notify("Interactive action queued for WhatsApp.");
   } catch (error) {
@@ -1049,7 +1209,7 @@ async function addInternalNote() {
       method: "POST",
       body: { note: note.trim() }
     });
-    await loadWhatsappConversation(state.whatsapp.selectedId);
+    await loadWhatsappConversation(state.whatsapp.selectedId, { incremental: true });
     renderWhatsappPage();
     notify("Internal note added.");
   } catch (error) {
@@ -1069,7 +1229,7 @@ async function sendReaction(messageId, emoji, button) {
       headers: { "idempotency-key": `${state.whatsapp.selectedId}-reaction-${messageId}-${emoji}-${Date.now()}` },
       body: { type: "REACTION", text: emoji, replyToMessageId: messageId }
     });
-    await loadWhatsappConversation(state.whatsapp.selectedId);
+    await loadWhatsappConversation(state.whatsapp.selectedId, { incremental: true });
     renderWhatsappPage();
   } catch (error) {
     notify(error.message, true);
@@ -1223,7 +1383,8 @@ async function markSelectedConversationRead() {
 
 function startWhatsappPolling() {
   stopWhatsappPolling();
-  state.whatsapp.timer = setTimeout(pollWhatsapp, 20_000);
+  if (document.hidden || state.whatsapp.syncing || !location.hash.startsWith("#whatsapp")) return;
+  state.whatsapp.timer = setTimeout(pollWhatsapp, WHATSAPP_POLL_INTERVAL_MS);
 }
 
 function stopWhatsappPolling() {
@@ -1231,27 +1392,124 @@ function stopWhatsappPolling() {
   if (state.whatsapp) state.whatsapp.timer = null;
 }
 
+function resumeWhatsappPolling() {
+  if (document.hidden || !state.session || !location.hash.startsWith("#whatsapp")) return;
+  stopWhatsappPolling();
+  pollWhatsapp();
+}
+
 async function pollWhatsapp() {
   const wa = state.whatsapp;
-  if (!location.hash.startsWith("#whatsapp")) return;
+  if (!location.hash.startsWith("#whatsapp") || document.hidden || wa.syncing) return;
+  wa.syncing = true;
   const previousUnread = new Map(wa.conversations.map((item) => [conversationId(item), Number(item.unreadCount || 0)]));
-  const draft = document.querySelector("#wa-message-input")?.value || "";
   try {
-    const from = new Date(Math.max(0, Number(wa.syncedAt || Date.now()) - 1500)).toISOString();
-    const { data } = await api(`/conversations?limit=100&from=${encodeURIComponent(from)}&sortBy=updatedAt&sortOrder=asc`);
-    const whatsappUpdates = data.filter((item) => item.currentChannel === "WHATSAPP");
+    const syncStartedAt = Date.now();
+    const from = new Date(Math.max(0, Number(wa.syncedAt || syncStartedAt) - WHATSAPP_SYNC_OVERLAP_MS)).toISOString();
+    const result = await api(`/conversations?limit=100&from=${encodeURIComponent(from)}&sortBy=updatedAt&sortOrder=asc`);
+    const whatsappUpdates = result.data.filter((item) => item.currentChannel === "WHATSAPP");
     const selectedChanged = whatsappUpdates.some((item) => conversationId(item) === wa.selectedId);
     const newlyUnread = whatsappUpdates.filter((item) => Number(item.unreadCount || 0) > Number(previousUnread.get(conversationId(item)) || 0));
-    wa.conversations = mergeById(wa.conversations, whatsappUpdates, "conversationId").sort((a, b) => (asDate(b.lastMessageAt)?.getTime() || 0) - (asDate(a.lastMessageAt)?.getTime() || 0));
-    wa.syncedAt = Date.now();
-    if (selectedChanged) await loadWhatsappConversation(wa.selectedId, { incremental: true });
-    if (!document.hidden && (whatsappUpdates.length || selectedChanged)) renderWhatsappPage(draft);
+    wa.conversations = sortWhatsappConversations(mergeById(wa.conversations, whatsappUpdates, "conversationId"));
+    let incoming = [];
+    if (selectedChanged) incoming = await loadWhatsappConversation(wa.selectedId, { incremental: true }) || [];
+    const markerUpdates = selectedChanged
+      ? await refreshChangedMessageMarkers(whatsappUpdates, new Set(incoming.map((item) => item.messageId || item.id)))
+      : [];
+    wa.syncedAt = serverSyncTime(result, syncStartedAt);
+    wa.syncState = "live";
+    await Promise.all([
+      chatCacheCall(wa.cache, "putConversations", whatsappUpdates),
+      chatCacheCall(wa.cache, "setMeta", "conversationSyncAt", wa.syncedAt)
+    ]);
+    if (whatsappUpdates.length || selectedChanged) {
+      refreshWhatsappLiveDom({ messagesChanged: incoming.length > 0 || markerUpdates.length > 0 });
+    }
+    if (incoming.some((item) => item.direction === "INBOUND")) markSelectedConversationRead();
     if (newlyUnread.length) showInboundNotification(newlyUnread[0]);
   } catch (error) {
+    wa.syncState = "offline";
+    updateWhatsappSyncBadge();
     console.warn("WhatsApp inbox refresh failed", error);
   } finally {
+    wa.syncing = false;
     startWhatsappPolling();
   }
+}
+
+async function refreshChangedMessageMarkers(conversationUpdates, loadedMessageIds = new Set()) {
+  const wa = state.whatsapp;
+  const selectedUpdate = conversationUpdates.find((item) => conversationId(item) === wa.selectedId);
+  if (!selectedUpdate) return [];
+  const markerIds = [...new Set([
+    selectedUpdate.deliveryStatusMessageId,
+    selectedUpdate.mediaUpdatedMessageId
+  ].filter((messageId) => messageId && !loadedMessageIds.has(messageId)))];
+  if (!markerIds.length) return [];
+  const results = await Promise.all(markerIds.map(async (messageId) => {
+    try {
+      return await refreshWhatsappMessage(messageId, { cacheOnly: true });
+    } catch (error) {
+      console.warn(`Changed message ${messageId} could not be refreshed`, error);
+      return null;
+    }
+  }));
+  const messages = results.filter((item) => item && item.conversationId === wa.selectedId);
+  if (!messages.length) return [];
+  wa.messages = mergeById(wa.messages, messages, "messageId")
+    .sort((left, right) => (asDate(left.createdAt)?.getTime() || 0) - (asDate(right.createdAt)?.getTime() || 0));
+  await chatCacheCall(wa.cache, "putMessages", messages);
+  return messages;
+}
+
+async function refreshWhatsappMessage(messageId, { cacheOnly = false } = {}) {
+  const message = (await api(`/messages/${encodeURIComponent(messageId)}`)).data;
+  if (!message || message.conversationId !== state.whatsapp.selectedId) return null;
+  if (cacheOnly) return message;
+  state.whatsapp.messages = mergeById(state.whatsapp.messages, [message], "messageId")
+    .sort((left, right) => (asDate(left.createdAt)?.getTime() || 0) - (asDate(right.createdAt)?.getTime() || 0));
+  await chatCacheCall(state.whatsapp.cache, "putMessages", [message]);
+  return message;
+}
+
+function refreshWhatsappLiveDom({ messagesChanged = false } = {}) {
+  updateWhatsappSyncBadge();
+  const list = document.querySelector("#wa-conversation-list");
+  if (list) {
+    list.innerHTML = waConversationList();
+    bindConversationRows();
+  }
+  if (!messagesChanged) return;
+  const body = document.querySelector("#wa-message-list");
+  if (!body) return;
+  const distanceFromBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
+  const stayAtBottom = distanceFromBottom < 120;
+  releaseMediaObjectUrls();
+  body.innerHTML = state.whatsapp.messages.length
+    ? state.whatsapp.messages.map(waMessage).join("")
+    : '<div class="wa-chat-empty">No messages yet. Use a Utility template to start this conversation.</div>';
+  bindWhatsappMessageEvents();
+  requestAnimationFrame(() => {
+    body.scrollTop = stayAtBottom ? body.scrollHeight : Math.max(0, body.scrollHeight - body.clientHeight - distanceFromBottom);
+  });
+}
+
+function updateWhatsappSyncBadge() {
+  const badge = document.querySelector("#wa-sync-state");
+  if (!badge) return;
+  const indicator = whatsappSyncIndicator();
+  badge.textContent = indicator.label;
+  badge.classList.toggle("connected", indicator.connected);
+  badge.classList.toggle("disconnected", !indicator.connected);
+}
+
+function whatsappSyncIndicator() {
+  const wa = state.whatsapp;
+  if (wa.syncState === "offline") return { connected: false, label: "Cached · reconnecting" };
+  if (wa.syncState === "cached") return { connected: true, label: "Cached · syncing" };
+  return wa.capabilities?.connected
+    ? { connected: true, label: "Cloud API connected" }
+    : { connected: false, label: "API setup needed" };
 }
 
 function showInboundNotification(conversation) {
@@ -1314,12 +1572,47 @@ function orderReference(order) { return order.orderNumber || `ORD-${String(order
 function suggestedTemplate(status) { return ({ CONFIRMED: "order_confirmation", DESIGN_READY: "design_ready", DISPATCHED: "dispatch_update", DELIVERED: "order_delivered" })[status] || null; }
 function orderStatusOptions(current) { return current && !ORDER_STATUSES.includes(current) ? [current, ...ORDER_STATUSES] : ORDER_STATUSES; }
 function renderUtilityPreview(template, values) { return template ? template.variables.reduce((text, field, index) => text.replaceAll(`{{${index + 1}}}`, values[field.key] || `{{${index + 1}}}`), template.body) : ""; }
-function messageStatus(status) { return ({ QUEUED: "○", SENT: "✓", DELIVERED: "✓✓", READ: "✓✓ Read", FAILED: "Failed" })[status] || pretty(status); }
+function messageStatusMarkup(status) {
+  const normalized = String(status || "QUEUED").toUpperCase();
+  const label = ({
+    QUEUED: "Queued",
+    SENDING: "Sending",
+    SENT: "Sent",
+    DELIVERED: "Delivered",
+    READ: "Read",
+    FAILED: "Failed",
+    CANCELLED: "Cancelled"
+  })[normalized] || pretty(normalized);
+  if (["QUEUED", "SENDING"].includes(normalized)) {
+    return `<span class="wa-delivery-status ${normalized.toLowerCase()}" role="img" aria-label="${attr(label)}" title="${attr(label)}"><span class="wa-status-clock"></span></span>`;
+  }
+  if (["FAILED", "CANCELLED"].includes(normalized)) {
+    return `<span class="wa-delivery-status failed" role="img" aria-label="${attr(label)}" title="${attr(label)}">!</span>`;
+  }
+  const paths = normalized === "SENT"
+    ? '<path d="M2 7.2 5.2 10.2 12.8 2.6"></path>'
+    : '<path d="M1.5 7.2 4.6 10.2 9.5 5.2"></path><path d="M6.8 7.2 9.8 10.2 15.8 3.2"></path>';
+  return `<span class="wa-delivery-status ${normalized.toLowerCase()}" role="img" aria-label="${attr(label)}" title="${attr(label)}"><svg viewBox="0 0 18 13" aria-hidden="true">${paths}</svg></span>`;
+}
 function shortTime(value) { const parsed = asDate(value); return parsed ? new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit" }).format(parsed) : ""; }
 function asDate(value) { if (!value) return null; if (value._seconds) return new Date(value._seconds * 1000); const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? null : parsed; }
 function compactDuration(ms) { const hours = Math.floor(ms / 3_600_000); const minutes = Math.max(0, Math.floor((ms % 3_600_000) / 60_000)); return `${hours}h ${minutes}m left`; }
 function fileSize(bytes) { const value = Number(bytes || 0); if (value < 1024) return `${value} B`; if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KB`; return `${(value / 1024 ** 2).toFixed(1)} MB`; }
 function mergeById(current, incoming, field) { const map = new Map(current.map((item) => [item[field] || item.id, item])); incoming.forEach((item) => map.set(item[field] || item.id, { ...(map.get(item[field] || item.id) || {}), ...item })); return [...map.values()]; }
+function sortWhatsappConversations(items) {
+  return [...items].sort((left, right) => (asDate(right.lastMessageAt)?.getTime() || 0) - (asDate(left.lastMessageAt)?.getTime() || 0));
+}
+function serverSyncTime(response, fallback = Date.now()) {
+  return asDate(response?.meta?.serverTime)?.getTime() || fallback;
+}
+async function chatCacheCall(cache, method, ...args) {
+  try {
+    return await cache?.[method]?.(...args);
+  } catch (error) {
+    console.warn(`Local chat cache ${method} failed`, error);
+    return null;
+  }
+}
 function freshWhatsappState() {
   return {
     conversations: [],
@@ -1328,9 +1621,14 @@ function freshWhatsappState() {
     quickReplies: [],
     users: [],
     capabilities: null,
+    syncState: "idle",
+    cache: null,
+    cacheHydrated: false,
     clientPanelOpen: false,
     selectedId: null,
+    messagesConversationId: null,
     overview: null,
+    overviewCachedAt: 0,
     filter: "ALL",
     search: "",
     mode: "TEXT",
@@ -1345,7 +1643,8 @@ function freshWhatsappState() {
     mediaObjectUrls: [],
     lastNotificationKey: null,
     syncedAt: null,
-    timer: null
+    timer: null,
+    syncing: false
   };
 }
 function freshMarketingState() {
