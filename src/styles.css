@@ -337,6 +337,7 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .compliance-icon { display: grid; flex: 0 0 28px; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: white; background: #28aa89; font-weight: 900; }
 .compliance-banner strong { font-size: 13px; }.compliance-banner p { margin: 4px 0 0; color: #5f8178; font-size: 12px; line-height: 1.5; }
 .segment-batch-panel { margin-bottom: 18px; border-color: #dce4ff; background: linear-gradient(135deg, #fff 0%, #f7f9ff 100%); }
+.direct-existing-panel { margin-bottom: 18px; border-color: #cdebdc; background: linear-gradient(135deg, #fff 0%, #f4fcf8 100%); }
 .batch-audience-form { margin-top: 16px; }.batch-audience-form .compact-grid { margin-top: 0; }
 .batch-audience-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 13px; }
 .batch-audience-actions .campaign-confirm { max-width: 620px; }

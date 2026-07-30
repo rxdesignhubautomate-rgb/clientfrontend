@@ -1856,7 +1856,8 @@ async function renderMarketing() {
     replyFilter: state.marketing.replyFilter || "ALL"
   };
   const stats = aggregateCampaignStats(state.marketing.campaigns);
-  const template = state.marketing.templates[0];
+  const template = state.marketing.templates.find((item) => item.id === "interest_followup")
+    || state.marketing.templates[0];
   const segment = currentClientSegment();
   page.innerHTML = `
     <div class="section-head marketing-head"><div><p class="eyebrow">CONSENT-FIRST WHATSAPP</p><h1>${esc(segmentLabel(segment))} campaigns</h1><p>Create safe 500-contact batches, run drip follow-ups and move replies into the WhatsApp Inbox until an order is created.</p></div><a class="button button-secondary" href="#whatsapp">Open Inbox</a></div>
@@ -1879,6 +1880,7 @@ async function renderMarketing() {
         <div class="batch-audience-actions"><label class="campaign-confirm"><input name="onlyOptedIn" type="checkbox" /> Include only customers whose WhatsApp marketing opt-in is recorded</label><button class="button button-primary" type="submit">Create batches</button></div>
       </form>
     </section>
+    ${renderDirectExistingCampaign(template)}
     ${renderWhatsAppPolicyTools()}
     ${renderRepliedProspectsSection()}
     <div class="marketing-grid">
@@ -1896,10 +1898,12 @@ async function renderMarketing() {
       </section>
       <section class="panel campaign-builder-panel">
         <div class="panel-title-row"><div><p class="eyebrow">STEP 2</p><h3>Create text or media drip</h3><p>Each delay is measured after the previous message. Video and files wait for a real open 24-hour customer-service window.</p></div><span class="badge blue">Policy safe</span></div>
-        ${template ? `<div class="template-preview"><small>Meta template to approve: <strong>${esc(template.name)}</strong></small><p>${esc(template.body)}</p></div>` : '<div class="form-error">Marketing template configuration is unavailable.</div>'}
+        ${template ? `<div id="campaign-template-preview">${campaignTemplatePreview(template)}</div>` : '<div class="form-error">Marketing template configuration is unavailable.</div>'}
         <form id="campaign-form" class="campaign-form">
           <label class="field">Campaign name<input name="name" required placeholder="e.g. July catalogue follow-up" /></label>
           <label class="field">Interested list<select name="audienceId" required ${state.marketing.audiences.length ? "" : "disabled"}><option value="">Select a list</option>${state.marketing.audiences.map((audience) => `<option value="${attr(audience.audienceId)}">${esc(audience.name)} (${esc(audience.contactCount || 0)})</option>`).join("")}</select></label>
+          <label class="field">Approved Meta template<select name="templateId" id="campaign-template" required>${state.marketing.templates.map((item) => `<option value="${attr(item.id)}" ${item.id === template.id ? "selected" : ""}>${esc(item.label || item.name)} · ${esc(item.name)}</option>`).join("")}</select></label>
+          <div id="campaign-template-header-media">${campaignTemplateHeaderMedia(template)}</div>
           <label class="field">What they are interested in<input name="interestLabel" required placeholder="e.g. premium catalogue printing" /></label>
           <div class="form-grid compact-grid">
             <label class="field">Delivery mode<select name="deliveryMode" id="campaign-delivery-mode"><option value="AUTO">Auto · template outside 24h window</option><option value="OPEN_WINDOW_ONLY">Open 24h window only · supports media</option></select></label>
@@ -2133,6 +2137,40 @@ function dripStep(position, delayMinutes, messageLine, enabled, locked = false) 
   return `<div class="drip-step"><div class="step-number">${position}</div><div class="step-fields">${locked ? '<input type="hidden" name="step1Enabled" value="on" />' : `<label class="step-toggle"><input type="checkbox" name="step${position}Enabled" ${enabled ? "checked" : ""} /> Use step ${position}</label>`}<div class="step-delay"><label>Wait<input type="number" name="step${position}DelayValue" min="0" max="43200" value="${delayValue}" ${locked ? "readonly" : ""} /></label><label>Unit<select name="step${position}DelayUnit"><option value="HOURS" ${delayUnit === "HOURS" ? "selected" : ""}>Hours</option><option value="DAYS" ${delayUnit === "DAYS" ? "selected" : ""}>Days</option></select></label></div><label class="step-message">Campaign line<input name="step${position}Message" maxlength="1024" value="${attr(messageLine)}" required /></label><label class="step-media">Optional image, video, audio or document<input type="file" name="step${position}Media" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt" /><small>Media automatically uses open-24-hour-window mode.</small></label></div></div>`;
 }
 
+function campaignTemplatePreview(template) {
+  const header = template.header?.type
+    ? ` · ${esc(pretty(template.header.type))} header`
+    : "";
+  return `<div class="template-preview"><small>Approved Meta template: <strong>${esc(template.name)}</strong>${header}</small><p>${esc(template.body)}</p></div>`;
+}
+
+function campaignTemplateHeaderMedia(template, inputName = "templateHeaderMedia") {
+  if (!template?.header?.type) return "";
+  const type = String(template.header.type).toLowerCase();
+  return `<label class="field template-header-media">Template ${esc(type)}<input type="file" name="${attr(inputName)}" accept="${attr(type)}/*" /><small>Upload the same ${esc(type)} format approved in Meta. It is attached to template sends outside the 24-hour window.</small></label>`;
+}
+
+function renderDirectExistingCampaign(template) {
+  if (!["OWNER", "ADMIN"].includes(state.session?.role) || !template) return "";
+  return `<section class="panel direct-existing-panel">
+    <div class="panel-title-row"><div><p class="eyebrow">ONE-CLICK EXISTING CLIENT SEND</p><h3>Schedule directly to all eligible existing clients</h3><p>No manual contact selection. The backend includes only existing clients whose WhatsApp marketing opt-in is already recorded, creates batches of up to 500, and staggers them automatically.</p></div><span class="badge blue">Owner/Admin</span></div>
+    <form id="direct-existing-campaign-form" class="campaign-form">
+      <div class="form-grid compact-grid">
+        <label class="field">Campaign name<input name="name" required placeholder="e.g. August visual aid promotion" /></label>
+        <label class="field">Product or interest<input name="interestLabel" required placeholder="e.g. visual aid designing" /></label>
+        <label class="field">Approved Meta template<select name="templateId" id="direct-existing-template" required>${state.marketing.templates.map((item) => `<option value="${attr(item.id)}" ${item.id === template.id ? "selected" : ""}>${esc(item.label || item.name)} · ${esc(item.name)}</option>`).join("")}</select></label>
+        <label class="field">Contacts per batch<input name="batchSize" type="number" min="1" max="500" value="500" required /></label>
+        <label class="field">Gap between batches (minutes)<input name="intervalMinutes" type="number" min="5" max="240" value="10" required /></label>
+        <label class="field">Start time (optional)<input name="startAt" type="datetime-local" /></label>
+      </div>
+      <div id="direct-existing-template-preview">${campaignTemplatePreview(template)}</div>
+      <div id="direct-existing-template-media">${campaignTemplateHeaderMedia(template, "directTemplateHeaderMedia")}</div>
+      <label class="campaign-confirm"><input name="confirmOptIn" type="checkbox" required /> I confirm this promotion will be sent only to existing clients whose WhatsApp marketing opt-in is already recorded. Missing consent will be skipped, not created automatically.</label>
+      <button class="button button-primary button-full" type="submit">Schedule eligible existing clients</button>
+    </form>
+  </section>`;
+}
+
 function campaignCard(campaign) {
   const stats = { total: 0, eligible: 0, active: 0, waiting: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, replied: 0, converted: 0, suppressed: 0, ...(campaign.stats || {}) };
   return `<article class="campaign-card"><div class="campaign-main"><div><span class="status-dot status-${attr(String(campaign.status || "draft").toLowerCase())}"></span><strong>${esc(campaign.name)}</strong><small>${esc(campaign.audienceName || "Audience")} · ${esc(segmentLabel(campaign.relationshipType))} · ${esc(pretty(campaign.deliveryMode || "AUTO"))} · ${esc(campaign.steps?.length || 0)} step${campaign.steps?.length === 1 ? "" : "s"} · ${esc(pretty(campaign.status))}${campaign.startAt ? ` · ${esc(dateTime(campaign.startAt))}` : ""}</small></div><div class="campaign-actions">${campaignActionButtons(campaign)}</div></div><div class="campaign-stats"><span><strong>${stats.eligible}</strong> enrolled</span><span><strong>${stats.waiting}</strong> waiting 24h</span><span><strong>${stats.sent}</strong> sent</span><span><strong>${stats.delivered}</strong> delivered</span><span><strong>${stats.read}</strong> read</span><span><strong>${stats.replied}</strong> replied</span><span><strong>${stats.converted}</strong> orders</span><span><strong>${stats.failed}</strong> failed</span><span><strong>${Math.max(stats.skipped, stats.suppressed)}</strong> skipped</span></div></article>`;
@@ -2179,10 +2217,17 @@ function bindMarketingEvents() {
   });
   document.querySelectorAll(".consent-action").forEach((button) => button.addEventListener("click", () => recordMarketingConsent(button)));
   document.querySelector("#batch-audience-form")?.addEventListener("submit", createSegmentAudienceBatches);
+  document.querySelector("#direct-existing-campaign-form")?.addEventListener("submit", createDirectExistingCampaigns);
+  document.querySelector("#direct-existing-template")?.addEventListener("change", updateDirectExistingTemplateUi);
   document.querySelector("#audience-form")?.addEventListener("submit", createMarketingAudience);
   document.querySelector("#campaign-form")?.addEventListener("submit", createMarketingCampaign);
+  document.querySelector("#campaign-template")?.addEventListener("change", updateCampaignTemplateUi);
   document.querySelectorAll('#campaign-form input[type="file"]').forEach((input) => input.addEventListener("change", () => {
     if (!input.files?.length) return;
+    if (input.name === "templateHeaderMedia") {
+      notify("Approved-template media selected.");
+      return;
+    }
     document.querySelector("#campaign-delivery-mode").value = "OPEN_WINDOW_ONLY";
     notify("Media selected. Delivery changed to open 24-hour window only.");
   }));
@@ -2194,6 +2239,24 @@ function bindMarketingEvents() {
   });
   document.querySelector("#utility-event-form")?.addEventListener("submit", sendUtilityEvent);
   bindRepliedProspectEvents();
+}
+
+function updateCampaignTemplateUi(event) {
+  const template = state.marketing.templates.find((item) => item.id === event.target.value)
+    || state.marketing.templates[0];
+  const preview = document.querySelector("#campaign-template-preview");
+  const headerMedia = document.querySelector("#campaign-template-header-media");
+  if (preview && template) preview.innerHTML = campaignTemplatePreview(template);
+  if (headerMedia) headerMedia.innerHTML = campaignTemplateHeaderMedia(template);
+}
+
+function updateDirectExistingTemplateUi(event) {
+  const template = state.marketing.templates.find((item) => item.id === event.target.value)
+    || state.marketing.templates[0];
+  const preview = document.querySelector("#direct-existing-template-preview");
+  const headerMedia = document.querySelector("#direct-existing-template-media");
+  if (preview && template) preview.innerHTML = campaignTemplatePreview(template);
+  if (headerMedia) headerMedia.innerHTML = campaignTemplateHeaderMedia(template, "directTemplateHeaderMedia");
 }
 
 async function createSegmentAudienceBatches(event) {
@@ -2222,6 +2285,49 @@ async function createSegmentAudienceBatches(event) {
     notify(error.message, true);
     button.disabled = false;
     button.textContent = "Create batches";
+  }
+}
+
+async function createDirectExistingCampaigns(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form));
+  const template = state.marketing.templates.find((item) => item.id === values.templateId);
+  const headerFile = form.elements.directTemplateHeaderMedia?.files?.[0] || null;
+  if (template?.header?.required && !headerFile) {
+    return notify(`Upload the ${String(template.header.type || "media").toLowerCase()} used by ${template.name}.`, true);
+  }
+  const startDescription = values.startAt
+    ? `starting ${dateTime(new Date(values.startAt))}`
+    : "starting in about two minutes";
+  if (!confirm(`Schedule ${template?.name || "the approved template"} for every eligible existing client in automatic 500-contact batches, ${startDescription}?`)) return;
+  const button = event.submitter;
+  button.disabled = true;
+  button.textContent = headerFile ? "Uploading template media…" : "Scheduling campaigns…";
+  try {
+    const attachment = headerFile ? await uploadMarketingAsset(headerFile) : null;
+    button.textContent = "Scheduling campaigns…";
+    const { data } = await api("/campaigns/direct-existing", {
+      method: "POST",
+      body: {
+        name: values.name,
+        description: "Direct approved-template send to opted-in existing clients",
+        interestLabel: values.interestLabel,
+        templateId: values.templateId,
+        ...(attachment ? { templateHeaderAttachmentId: attachment.attachmentId || attachment.id } : {}),
+        batchSize: Number(values.batchSize || 500),
+        intervalMinutes: Number(values.intervalMinutes || 10),
+        ...(values.startAt ? { startAt: new Date(values.startAt).toISOString() } : {}),
+        messageLine: `Approved ${template?.name || "marketing"} template for existing clients`,
+        confirmOptIn: values.confirmOptIn === "on"
+      }
+    });
+    notify(`${data.totalContacts} opted-in existing clients scheduled across ${data.batchCount} batch campaign(s).`);
+    await renderMarketing();
+  } catch (error) {
+    notify(error.message, true);
+    button.disabled = false;
+    button.textContent = "Schedule eligible existing clients";
   }
 }
 
@@ -2276,12 +2382,20 @@ async function createMarketingCampaign(event) {
   const mediaFiles = positions.map((position) => form.elements[`step${position}Media`]?.files?.[0] || null);
   const hasMedia = mediaFiles.some(Boolean);
   const deliveryMode = hasMedia ? "OPEN_WINDOW_ONLY" : values.deliveryMode;
+  const template = state.marketing.templates.find((item) => item.id === values.templateId);
+  const templateHeaderFile = form.elements.templateHeaderMedia?.files?.[0] || null;
+  if (deliveryMode !== "OPEN_WINDOW_ONLY" && template?.header?.required && !templateHeaderFile) {
+    return notify(`Upload the ${String(template.header.type || "media").toLowerCase()} used by ${template.name}.`, true);
+  }
   if (!confirm(`Save this ${positions.length}-step ${hasMedia ? "media " : ""}campaign as a draft? Only recorded opt-ins can be enrolled later.`)) return;
   const button = event.submitter;
   button.disabled = true;
   button.textContent = hasMedia ? "Uploading media…" : "Saving draft…";
   try {
-    const uploaded = await Promise.all(mediaFiles.map((file) => file ? uploadMarketingAsset(file) : null));
+    const [templateHeaderAttachment, uploaded] = await Promise.all([
+      templateHeaderFile ? uploadMarketingAsset(templateHeaderFile) : null,
+      Promise.all(mediaFiles.map((file) => file ? uploadMarketingAsset(file) : null))
+    ]);
     const steps = positions.map((position, index) => {
       const unit = values[`step${position}DelayUnit`] || "HOURS";
       const delayValue = Number(values[`step${position}DelayValue`] || 0);
@@ -2301,7 +2415,10 @@ async function createMarketingCampaign(event) {
       name: values.name,
       audienceId: values.audienceId,
       interestLabel: values.interestLabel,
-      templateId: state.marketing.templates[0]?.id || "interest_followup",
+      templateId: values.templateId || "interest_followup",
+      ...(templateHeaderAttachment ? {
+        templateHeaderAttachmentId: templateHeaderAttachment.attachmentId || templateHeaderAttachment.id
+      } : {}),
       deliveryMode,
       trigger: values.trigger,
       steps

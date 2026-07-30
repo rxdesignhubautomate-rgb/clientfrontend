@@ -1,6 +1,6 @@
-# RX Client CRM frontend v1.7.0 deployment
+# RX Client CRM frontend v1.9.0 deployment
 
-1. Deploy backend v2.7.0 first.
+1. Deploy backend v2.9.0 first.
 2. In Vercel, import this frontend project or upload the project files.
 3. Set `CRM_API_BASE_URL=https://rxclientsbases.onrender.com/api/v1` for Production.
 4. Redeploy without using an old build cache.
