@@ -375,7 +375,7 @@ async function loadWhatsappConversation(id, { incremental = false } = {}) {
   }
   wa.selectedId = id;
   selectDefaultWhatsappOrder();
-  if (!whatsappWindow().open && wa.mode === "TEXT") wa.mode = "TEMPLATE";
+  syncWhatsappComposerMode({ conversationChanged: !sameConversation });
   prefillUtilityValues(false);
   await Promise.all([
     chatCacheCall(wa.cache, "putMessages", incoming),
@@ -391,10 +391,21 @@ function selectDefaultWhatsappOrder() {
   }
 }
 
+function syncWhatsappComposerMode({ conversationChanged = false } = {}) {
+  const wa = state.whatsapp;
+  if (!whatsappWindow().open) {
+    wa.mode = "TEMPLATE";
+    wa.composerModeTouched = false;
+    return;
+  }
+  if (conversationChanged || !wa.composerModeTouched) wa.mode = "TEXT";
+}
+
 function renderWhatsappPage(draftText = "") {
   const wa = state.whatsapp;
   const selected = selectedConversation();
   const syncIndicator = whatsappSyncIndicator();
+  const viewport = captureWhatsappViewport();
   releaseMediaObjectUrls();
   page.innerHTML = `
     <div class="wa-page-head">
@@ -417,8 +428,8 @@ function renderWhatsappPage(draftText = "") {
   bindWhatsappEvents();
   if (selected) {
     requestAnimationFrame(() => {
-      const body = document.querySelector("#wa-message-list");
-      if (body) body.scrollTop = body.scrollHeight;
+      restoreWhatsappViewport(viewport, conversationId(selected));
+      installWhatsappMediaScrollStability(document.querySelector("#wa-message-list"));
     });
     markSelectedConversationRead();
   }
@@ -431,7 +442,7 @@ function whatsappChatMarkup(conversation, draftText) {
   const windowStatus = whatsappWindow();
   const important = (contact.tags || []).includes("IMPORTANT");
   return `
-    <section class="wa-chat-panel">
+    <section class="wa-chat-panel" data-chat-conversation-id="${attr(conversationId(conversation))}">
       <header class="wa-chat-head">
         <a class="wa-mobile-back" href="#whatsapp" aria-label="Back to conversations">‹</a><div class="wa-chat-person"><span class="wa-avatar">${esc(initials(name))}</span><div><strong>${esc(name)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "")}</small></div></div>
         <div class="wa-chat-actions">
@@ -635,6 +646,7 @@ function bindWhatsappEvents() {
   bindConversationRows();
   document.querySelectorAll("[data-wa-mode]").forEach((button) => button.addEventListener("click", () => {
     state.whatsapp.mode = button.dataset.waMode;
+    state.whatsapp.composerModeTouched = true;
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
   }));
   document.querySelector("#wa-template-select")?.addEventListener("change", (event) => {
@@ -693,6 +705,7 @@ function bindWhatsappEvents() {
   }));
   document.querySelectorAll("[data-prepare-template]").forEach((button) => button.addEventListener("click", () => {
     state.whatsapp.mode = "TEMPLATE";
+    state.whatsapp.composerModeTouched = true;
     state.whatsapp.templateId = button.dataset.prepareTemplate;
     state.whatsapp.selectedOrderId = button.dataset.orderId;
     state.whatsapp.templateValues = {};
@@ -868,6 +881,7 @@ function releaseMediaObjectUrls() {
 function bindConversationRows() {
   document.querySelectorAll("[data-conversation-id]").forEach((button) => button.addEventListener("click", () => {
     state.whatsapp.clientPanelOpen = false;
+    state.whatsapp.composerModeTouched = false;
     location.hash = `#whatsapp/${button.dataset.conversationId}`;
   }));
 }
@@ -1478,22 +1492,127 @@ function refreshWhatsappLiveDom({ messagesChanged = false } = {}) {
   updateWhatsappSyncBadge();
   const list = document.querySelector("#wa-conversation-list");
   if (list) {
+    const listViewport = captureScrollAnchor(list, ".wa-conversation", "conversationId");
     list.innerHTML = waConversationList();
     bindConversationRows();
+    restoreScrollAnchor(list, listViewport, ".wa-conversation", "conversationId");
   }
   if (!messagesChanged) return;
   const body = document.querySelector("#wa-message-list");
   if (!body) return;
-  const distanceFromBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
-  const stayAtBottom = distanceFromBottom < 120;
+  const messageViewport = captureMessageViewport(body);
   releaseMediaObjectUrls();
   body.innerHTML = state.whatsapp.messages.length
     ? state.whatsapp.messages.map(waMessage).join("")
     : '<div class="wa-chat-empty">No messages yet. Use a Utility template to start this conversation.</div>';
   bindWhatsappMessageEvents();
   requestAnimationFrame(() => {
-    body.scrollTop = stayAtBottom ? body.scrollHeight : Math.max(0, body.scrollHeight - body.clientHeight - distanceFromBottom);
+    restoreMessageViewport(body, messageViewport);
+    installWhatsappMediaScrollStability(body);
   });
+}
+
+function captureWhatsappViewport() {
+  const list = document.querySelector("#wa-conversation-list");
+  const body = document.querySelector("#wa-message-list");
+  const panel = document.querySelector("[data-chat-conversation-id]");
+  return {
+    conversationId: panel?.dataset.chatConversationId || null,
+    list: captureScrollAnchor(list, ".wa-conversation", "conversationId"),
+    messages: captureMessageViewport(body)
+  };
+}
+
+function restoreWhatsappViewport(viewport, selectedId) {
+  const list = document.querySelector("#wa-conversation-list");
+  const body = document.querySelector("#wa-message-list");
+  restoreScrollAnchor(list, viewport?.list, ".wa-conversation", "conversationId");
+  if (!body) return;
+  if (!viewport?.messages || viewport.conversationId !== selectedId) {
+    body.scrollTop = body.scrollHeight;
+    return;
+  }
+  restoreMessageViewport(body, viewport.messages);
+}
+
+function captureMessageViewport(body) {
+  if (!body) return null;
+  const distanceFromBottom = Math.max(0, body.scrollHeight - body.scrollTop - body.clientHeight);
+  const anchor = captureScrollAnchor(body, "[data-message-row]", "messageRow");
+  return {
+    ...anchor,
+    atBottom: distanceFromBottom <= 80,
+    distanceFromBottom,
+    scrollTop: body.scrollTop
+  };
+}
+
+function restoreMessageViewport(body, viewport) {
+  if (!body || !viewport) return;
+  if (viewport.atBottom) {
+    body.scrollTop = body.scrollHeight;
+    return;
+  }
+  if (restoreScrollAnchor(body, viewport, "[data-message-row]", "messageRow")) return;
+  body.scrollTop = Math.max(0, body.scrollHeight - body.clientHeight - viewport.distanceFromBottom);
+}
+
+function captureScrollAnchor(scroller, selector, datasetKey) {
+  if (!scroller) return null;
+  const scrollerTop = scroller.getBoundingClientRect().top;
+  const elements = [...scroller.querySelectorAll(selector)];
+  const anchor = elements.find((element) => element.getBoundingClientRect().bottom > scrollerTop + 1);
+  return {
+    id: anchor?.dataset?.[datasetKey] || null,
+    offset: anchor ? anchor.getBoundingClientRect().top - scrollerTop : 0,
+    scrollTop: scroller.scrollTop
+  };
+}
+
+function restoreScrollAnchor(scroller, viewport, selector, datasetKey) {
+  if (!scroller || !viewport) return false;
+  const anchor = viewport.id
+    ? [...scroller.querySelectorAll(selector)].find((element) => element.dataset?.[datasetKey] === viewport.id)
+    : null;
+  if (!anchor) {
+    scroller.scrollTop = viewport.scrollTop || 0;
+    return false;
+  }
+  const scrollerTop = scroller.getBoundingClientRect().top;
+  scroller.scrollTop += anchor.getBoundingClientRect().top - scrollerTop - viewport.offset;
+  return true;
+}
+
+function installWhatsappMediaScrollStability(body) {
+  if (!body) return;
+  body.__waScrollCleanup?.();
+  let viewport = captureMessageViewport(body);
+  let frame = null;
+  const rememberViewport = () => {
+    viewport = captureMessageViewport(body);
+  };
+  const settleMedia = () => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = requestAnimationFrame(() => {
+      restoreMessageViewport(body, viewport);
+      rememberViewport();
+      frame = null;
+    });
+  };
+  body.addEventListener("scroll", rememberViewport, { passive: true });
+  const media = [...body.querySelectorAll("img, video, audio")];
+  media.forEach((element) => {
+    element.addEventListener("load", settleMedia, { once: true });
+    element.addEventListener("loadedmetadata", settleMedia, { once: true });
+  });
+  body.__waScrollCleanup = () => {
+    if (frame) cancelAnimationFrame(frame);
+    body.removeEventListener("scroll", rememberViewport);
+    media.forEach((element) => {
+      element.removeEventListener("load", settleMedia);
+      element.removeEventListener("loadedmetadata", settleMedia);
+    });
+  };
 }
 
 function updateWhatsappSyncBadge() {
@@ -1634,6 +1753,7 @@ function freshWhatsappState() {
     filter: "ALL",
     search: "",
     mode: "TEXT",
+    composerModeTouched: false,
     templateId: null,
     templateValues: {},
     selectedOrderId: null,

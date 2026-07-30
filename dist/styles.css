@@ -161,7 +161,7 @@ tbody tr { cursor: pointer; transition: background .15s; } tbody tr:hover { back
 .whatsapp-route .app-shell { height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
 .whatsapp-route .main { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100vh; height: 100dvh; min-height: 0; overflow: hidden; }
 .whatsapp-route .page { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; padding-top: 24px; padding-bottom: 24px; }
-.whatsapp-route .wa-shell { height: auto; min-height: 0; }
+.whatsapp-route .wa-shell { height: 100%; max-height: 100%; min-height: 0; }
 .wa-shell { display: grid; grid-template-columns: 300px minmax(390px, 1fr) 310px; min-height: 500px; height: calc(100vh - 190px); overflow: hidden; border: 1px solid #dfe5ee; border-radius: 20px; background: white; box-shadow: var(--shadow); }
 .wa-inbox-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid #e3e8ef; background: #fff; }
 .wa-inbox-tools { padding: 16px 14px 12px; border-bottom: 1px solid #edf0f4; }
@@ -257,7 +257,7 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .wa-media-recovery strong { color: #71502a; font-size: 9px; }.wa-media-recovery small { margin-top: 2px; color: #8b7358; font-size: 8px; line-height: 1.35; }
 .wa-media-recovery button { grid-column: 2; width: fit-content; padding: 5px 8px; border: 0; border-radius: 6px; color: white; background: #b7782d; cursor: pointer; font-size: 8px; font-weight: 800; }
 .wa-chat-empty { margin: 50px auto; padding: 13px 16px; border-radius: 9px; color: #68767b; background: rgba(255,255,255,.82); text-align: center; font-size: 11px; }
-.wa-composer { position: relative; z-index: 2; max-height: 390px; overflow-x: hidden; overflow-y: auto; border-top: 1px solid #dfe4df; background: #f6f8f7; box-shadow: 0 -4px 14px rgba(27, 43, 38, .05); }
+.wa-composer { position: relative; z-index: 2; min-height: 0; max-height: min(390px, 48vh); overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; border-top: 1px solid #dfe4df; background: #f6f8f7; box-shadow: 0 -4px 14px rgba(27, 43, 38, .05); }
 .wa-compose-tabs { display: flex; align-items: center; gap: 6px; padding: 8px 12px 0; }
 .wa-compose-tabs button { padding: 7px 10px; border: 0; border-radius: 8px; color: #73808e; background: transparent; cursor: pointer; font-size: 10px; font-weight: 800; }
 .wa-compose-tabs button.active { color: #146d5b; background: #dcf4ec; }
