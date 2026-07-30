@@ -1964,7 +1964,7 @@ function renderWhatsAppPolicyTools() {
   const remote = state.marketing.metaTemplates || [];
   const templateRows = configured.map((template) => ({
     ...template,
-    remote: remote.find((item) => item.name === template.name && String(item.language || "en").toLowerCase() === String(template.language || "en").toLowerCase()) || null
+    remote: findRemoteTemplate(remote, template)
   }));
   const approved = templateRows.filter((item) => item.remote?.status === "APPROVED").length;
   const blocked = templateRows.filter((item) => item.remote && item.remote.status !== "APPROVED").length;
@@ -2000,6 +2000,27 @@ function renderWhatsAppPolicyTools() {
       </form>
     </section>
   </div>`;
+}
+
+function findRemoteTemplate(remoteTemplates, configuredTemplate) {
+  const sameName = remoteTemplates.filter((item) =>
+    String(item.name || "").trim().toLowerCase() === String(configuredTemplate.name || "").trim().toLowerCase()
+  );
+  const expected = normalizeTemplateLanguage(configuredTemplate.language);
+  const exact = sameName.find((item) => normalizeTemplateLanguage(item.language) === expected);
+  if (exact) return exact;
+  const sameFamily = sameName.filter((item) =>
+    templateLanguageBase(item.language) === templateLanguageBase(expected)
+  );
+  return sameFamily.length === 1 ? sameFamily[0] : null;
+}
+
+function normalizeTemplateLanguage(value) {
+  return String(value || "en").trim().toLowerCase().replaceAll("-", "_");
+}
+
+function templateLanguageBase(value) {
+  return normalizeTemplateLanguage(value).split("_")[0];
 }
 
 function templateStatusCard(template) {
