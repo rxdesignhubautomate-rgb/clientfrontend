@@ -53,6 +53,8 @@ async function login(event) {
       email: payload.data.user.email,
       name: payload.data.user.name,
       role: payload.data.user.role,
+      userId: payload.data.user.userId,
+      clientScope: payload.data.user.clientScope,
       accessToken: payload.data.accessToken,
       refreshToken: payload.data.refreshToken,
       expiresAt: Date.now() + Number(payload.data.expiresInSeconds || 3600) * 1000
@@ -84,6 +86,7 @@ async function boot() {
   document.querySelectorAll("[data-owner-only]").forEach((element) => {
     element.hidden = !["OWNER", "ADMIN"].includes(state.session?.role);
   });
+  document.querySelector('[data-route="marketing"]')?.removeAttribute("hidden");
   if (!location.hash) location.hash = "#dashboard";
   await renderRoute();
 }
@@ -147,6 +150,24 @@ async function uploadAttachment(file, contactId, conversationId) {
   return payload.data;
 }
 
+async function uploadMarketingAsset(file) {
+  if (!state.session) throw new Error("Authentication required");
+  if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
+  const response = await fetch(`${config.apiBaseUrl}/attachments?purpose=MARKETING_ASSET`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${state.session.accessToken}`,
+      "content-type": file.type || "application/octet-stream",
+      "x-filename": encodeURIComponent(file.name || "campaign-asset.bin")
+    },
+    body: file
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) logout();
+  if (!response.ok) throw new Error(payload.error?.message || payload.message || `Campaign media upload failed (${response.status})`);
+  return payload.data;
+}
+
 async function fetchAttachmentBlob(attachmentId, { download = false } = {}) {
   if (!state.session) throw new Error("Authentication required");
   if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
@@ -181,6 +202,8 @@ async function refreshSession() {
     email: payload.data.user.email,
     name: payload.data.user.name,
     role: payload.data.user.role,
+    userId: payload.data.user.userId,
+    clientScope: payload.data.user.clientScope,
     accessToken: payload.data.accessToken,
     refreshToken: payload.data.refreshToken,
     expiresAt: Date.now() + Number(payload.data.expiresInSeconds || 3600) * 1000
@@ -199,7 +222,7 @@ async function renderRoute() {
     discardVoiceRecording();
     closeImageViewer();
   }
-  if (["import", "marketing"].includes(base) && !["OWNER", "ADMIN"].includes(state.session?.role)) {
+  if (base === "import" && !["OWNER", "ADMIN"].includes(state.session?.role)) {
     location.hash = "#dashboard";
     return;
   }
@@ -222,14 +245,18 @@ async function renderRoute() {
 async function renderDashboard() {
   pageTitle.textContent = "Overview";
   const { data } = await api("/dashboard/summary");
+  const segment = currentClientSegment();
+  const primaryLabel = segment === "PROSPECT" ? "Prospects" : segment === "EXISTING_CLIENT" ? "Existing clients" : "Existing clients";
+  const primaryValue = segment === "PROSPECT" ? data.contacts : (data.existingClients ?? data.contacts);
+  const scopeDescription = segment === "PROSPECT" ? "Reshu's new-client pipeline" : segment === "EXISTING_CLIENT" ? "Ankit's client operations" : `${formatCount(data.contacts)} total contact records`;
   page.innerHTML = `
-    <div class="section-head"><div><h1>Good to see you.</h1><p>Your client operations at a glance.</p></div><a class="button button-primary" href="#clients">View clients</a></div>
+    <div class="section-head"><div><h1>Good to see you.</h1><p>${esc(segmentLabel(segment))} operations at a glance.</p></div><a class="button button-primary" href="#clients">View ${segment === "PROSPECT" ? "prospects" : "clients"}</a></div>
     <div class="cards">
-      ${metric("Total clients", data.contacts, "All client records", "blue")}
+      ${metric(primaryLabel, primaryValue, scopeDescription, "blue")}
       ${metric("Active orders", data.activeOrders, "Currently in production", "mint")}
       ${metric("Due follow-ups", data.dueFollowUps, "Need attention", "amber")}
       ${metric("Open conversations", data.openConversations, `${data.unreadMessages} unread messages`, "blue")}
-      ${metric("Active leads", data.activeLeads, "Separate from existing clients", "mint")}
+      ${metric("Active leads", data.activeLeads, segment === "PROSPECT" ? "Potential new clients" : "Separate from existing clients", "mint")}
       ${metric("Unread messages", data.unreadMessages, "Across WhatsApp and channels", "amber")}
     </div>
     <div class="quick-grid">
@@ -1777,6 +1804,27 @@ function freshMarketingState() {
   };
 }
 
+function currentClientSegment() {
+  const scope = state.session?.clientScope;
+  if (scope === "EXISTING_CLIENT" || scope === "PROSPECT") return scope;
+  const email = String(state.session?.email || "").toLowerCase();
+  if (email === "ankit@rxdesignhub.com") return "EXISTING_CLIENT";
+  if (email === "reshu@rxdesignhub.com") return "PROSPECT";
+  return "ALL";
+}
+
+function segmentLabel(segment = currentClientSegment()) {
+  if (segment === "EXISTING_CLIENT") return "Existing clients";
+  if (segment === "PROSPECT") return "Prospects";
+  return "All customers";
+}
+
+function segmentOptions() {
+  const segment = currentClientSegment();
+  if (segment !== "ALL") return `<option value="${segment}">${segmentLabel(segment)}</option>`;
+  return '<option value="EXISTING_CLIENT">Existing clients · Ankit</option><option value="PROSPECT">Prospects · Reshu</option>';
+}
+
 const ORDER_STATUSES = ["CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION", "READY_TO_DISPATCH", "DISPATCHED", "DELIVERED", "ON_HOLD", "CANCELLED"];
 
 async function renderMarketing() {
@@ -1809,8 +1857,9 @@ async function renderMarketing() {
   };
   const stats = aggregateCampaignStats(state.marketing.campaigns);
   const template = state.marketing.templates[0];
+  const segment = currentClientSegment();
   page.innerHTML = `
-    <div class="section-head marketing-head"><div><p class="eyebrow">CONSENT-FIRST WHATSAPP</p><h1>Interested customer campaigns</h1><p>Build a list, schedule follow-ups and move replies into your WhatsApp Inbox until an order is created.</p></div><a class="button button-secondary" href="#whatsapp">Open Inbox</a></div>
+    <div class="section-head marketing-head"><div><p class="eyebrow">CONSENT-FIRST WHATSAPP</p><h1>${esc(segmentLabel(segment))} campaigns</h1><p>Create safe 500-contact batches, run drip follow-ups and move replies into the WhatsApp Inbox until an order is created.</p></div><a class="button button-secondary" href="#whatsapp">Open Inbox</a></div>
     <div class="marketing-metrics">
       ${miniStat("Campaigns", state.marketing.campaigns.length)}
       ${miniStat("Messages queued", stats.sent)}
@@ -1818,6 +1867,18 @@ async function renderMarketing() {
       ${miniStat("Orders connected", stats.converted)}
     </div>
     <div class="compliance-banner"><span class="compliance-icon">✓</span><div><strong>Marketing safety is enforced by the backend</strong><p>Only customers with a recorded WhatsApp opt-in are enrolled. A reply pauses the drip, STOP opts the customer out, and a new order marks the campaign converted.</p></div></div>
+    <section class="panel segment-batch-panel">
+      <div class="panel-title-row"><div><p class="eyebrow">AUTOMATIC BATCHING</p><h3>Create 500-contact campaign lists</h3><p>Existing clients stay with Ankit and prospects stay with Reshu. Large segments are split into separate audiences of at most 500 contacts.</p></div><span class="badge blue">${esc(segmentLabel(segment))}</span></div>
+      <form id="batch-audience-form" class="batch-audience-form">
+        <div class="form-grid compact-grid">
+          <label class="field">Customer type<select name="relationshipType" required>${segmentOptions()}</select></label>
+          <label class="field">Batch name<input name="name" required placeholder="e.g. August product campaign" /></label>
+          <label class="field">Contacts per batch<input name="batchSize" type="number" min="1" max="500" value="500" required /></label>
+          <label class="field">Description<input name="description" placeholder="Campaign purpose or product" /></label>
+        </div>
+        <div class="batch-audience-actions"><label class="campaign-confirm"><input name="onlyOptedIn" type="checkbox" /> Include only customers whose WhatsApp marketing opt-in is recorded</label><button class="button button-primary" type="submit">Create batches</button></div>
+      </form>
+    </section>
     ${renderWhatsAppPolicyTools()}
     ${renderRepliedProspectsSection()}
     <div class="marketing-grid">
@@ -1831,23 +1892,29 @@ async function renderMarketing() {
           </tbody></table></div>
           <div class="form-actions audience-actions"><span id="audience-selection-count" class="muted">0 selected</span><button class="button button-primary" type="submit">Save interested list</button></div>
         </form>
-        <div class="saved-audiences"><h4>Saved lists</h4>${state.marketing.audiences.length ? state.marketing.audiences.map((audience) => `<div class="saved-audience"><div><strong>${esc(audience.name)}</strong><small>${esc(audience.description || "Interested customer list")}</small></div><span>${esc(audience.contactCount || 0)} customers</span></div>`).join("") : '<p class="muted">No list created yet.</p>'}</div>
+        <div class="saved-audiences"><h4>Saved lists</h4>${state.marketing.audiences.length ? state.marketing.audiences.map((audience) => `<div class="saved-audience"><div><strong>${esc(audience.name)}</strong><small>${esc(audience.description || "Interested customer list")} · ${esc(segmentLabel(audience.relationshipType))}${audience.batchNumber ? ` · Batch ${esc(audience.batchNumber)}/${esc(audience.batchCount)}` : ""}</small></div><span>${esc(audience.contactCount || 0)} customers</span></div>`).join("") : '<p class="muted">No list created yet.</p>'}</div>
       </section>
       <section class="panel campaign-builder-panel">
-        <div class="panel-title-row"><div><p class="eyebrow">STEP 2</p><h3>Create drip campaign</h3><p>Each delay is measured after the previous message.</p></div><span class="badge blue">Marketing template</span></div>
+        <div class="panel-title-row"><div><p class="eyebrow">STEP 2</p><h3>Create text or media drip</h3><p>Each delay is measured after the previous message. Video and files wait for a real open 24-hour customer-service window.</p></div><span class="badge blue">Policy safe</span></div>
         ${template ? `<div class="template-preview"><small>Meta template to approve: <strong>${esc(template.name)}</strong></small><p>${esc(template.body)}</p></div>` : '<div class="form-error">Marketing template configuration is unavailable.</div>'}
         <form id="campaign-form" class="campaign-form">
           <label class="field">Campaign name<input name="name" required placeholder="e.g. July catalogue follow-up" /></label>
           <label class="field">Interested list<select name="audienceId" required ${state.marketing.audiences.length ? "" : "disabled"}><option value="">Select a list</option>${state.marketing.audiences.map((audience) => `<option value="${attr(audience.audienceId)}">${esc(audience.name)} (${esc(audience.contactCount || 0)})</option>`).join("")}</select></label>
           <label class="field">What they are interested in<input name="interestLabel" required placeholder="e.g. premium catalogue printing" /></label>
+          <div class="form-grid compact-grid">
+            <label class="field">Delivery mode<select name="deliveryMode" id="campaign-delivery-mode"><option value="AUTO">Auto · template outside 24h window</option><option value="OPEN_WINDOW_ONLY">Open 24h window only · supports media</option></select></label>
+            <label class="field">Start rule<select name="trigger" id="campaign-trigger"><option value="MANUAL">Start after campaign launch</option><option value="CUSTOMER_REPLY">Start when customer replies</option></select></label>
+          </div>
           <div class="drip-steps">
             ${dripStep(1, 0, "Share the latest options and pricing with our team.", true, true)}
-            ${dripStep(2, 3, "Would you like us to prepare a quotation for you?", true)}
-            ${dripStep(3, 7, "Reply here whenever you are ready and our team will help place the order.", true)}
+            ${dripStep(2, 4320, "Would you like us to prepare a quotation for you?", true)}
+            ${dripStep(3, 10080, "Reply here whenever you are ready and our team will help place the order.", true)}
+            ${dripStep(4, 14400, "Would you like to see another product option?", false)}
+            ${dripStep(5, 20160, "We are here whenever you want to continue.", false)}
           </div>
           <label class="campaign-confirm"><input name="confirmConsent" type="checkbox" required /> I confirm that the selected customers have permission to receive this type of WhatsApp marketing message.</label>
           <button class="button button-primary button-full" type="submit" ${state.marketing.audiences.length && template ? "" : "disabled"}>Save campaign draft</button>
-          <p class="muted tiny-note">After saving, submit the draft for approval. An approved campaign can then be started now or scheduled.</p>
+          <p class="muted tiny-note">AUTO mode uses approved Meta marketing templates outside 24 hours. Media steps are sent only in OPEN WINDOW mode; if the window closes, the CRM waits for the next customer reply.</p>
         </form>
       </section>
     </div>
@@ -1901,7 +1968,7 @@ function renderWhatsAppPolicyTools() {
   const decision = state.marketing.decision;
   const customerOptions = marketingCustomerOptions();
   return `<section class="panel policy-center-panel">
-    <div class="panel-title-row"><div><p class="eyebrow">WHATSAPP POLICY CENTER</p><h3>Meta template readiness</h3><p>Sync before sending. Only templates marked Approved by Meta can be used outside the customer-service window.</p></div><button type="button" class="button button-secondary" id="sync-meta-templates">Sync from Meta</button></div>
+    <div class="panel-title-row"><div><p class="eyebrow">WHATSAPP POLICY CENTER</p><h3>Meta template readiness</h3><p>Sync before sending. Only templates marked Approved by Meta can be used outside the customer-service window.</p></div>${["OWNER", "ADMIN"].includes(state.session?.role) ? '<button type="button" class="button button-secondary" id="sync-meta-templates">Sync from Meta</button>' : '<span class="count-pill">Admin sync</span>'}</div>
     ${state.marketing.templateLoadError ? `<div class="form-error policy-error">Template status unavailable: ${esc(state.marketing.templateLoadError)}</div>` : ""}
     <div class="template-summary"><span class="template-count approved"><strong>${approved}</strong> Approved</span><span class="template-count review"><strong>${blocked}</strong> In review / blocked</span><span class="template-count missing"><strong>${missing}</strong> Not synced</span><span class="template-count remote"><strong>${remote.length}</strong> Meta templates</span></div>
     <details class="template-registry"><summary>View configured template status (${templateRows.length})</summary><div class="template-status-grid">${templateRows.length ? templateRows.map(templateStatusCard).join("") : '<div class="empty-state">Backend template registry is unavailable.</div>'}</div></details>
@@ -2059,13 +2126,16 @@ function marketingCustomerRow(contact) {
   return `<tr data-marketing-contact-row data-search="${attr(`${name} ${contact.contactPerson || ""} ${contact.primaryPhone || ""} ${contact.city || ""}`.toLowerCase())}"><td><input data-audience-contact type="checkbox" value="${attr(contact.contactId)}" /></td><td><div class="party-cell"><span class="party-avatar">${esc(initials(name))}</span><div><strong>${esc(name)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "")}</small></div></div></td><td><span class="consent-badge ${optedIn ? "opted-in" : consent === "OPTED_OUT" ? "opted-out" : "unknown"}">${optedIn ? "Opted in" : consent === "OPTED_OUT" ? "Opted out" : "Not recorded"}</span></td><td><button class="text-button consent-action" type="button" data-consent-contact="${attr(contact.contactId)}" data-consent-status="${optedIn ? "OPTED_OUT" : "OPTED_IN"}">${optedIn ? "Opt out" : "Record opt-in"}</button></td></tr>`;
 }
 
-function dripStep(position, delayDays, messageLine, enabled, locked = false) {
-  return `<div class="drip-step"><div class="step-number">${position}</div><div class="step-fields">${locked ? '<input type="hidden" name="step1Enabled" value="on" />' : `<label class="step-toggle"><input type="checkbox" name="step${position}Enabled" ${enabled ? "checked" : ""} /> Use step ${position}</label>`}<label>Wait days<input type="number" name="step${position}Delay" min="0" max="90" value="${delayDays}" ${locked ? "readonly" : ""} /></label><label class="step-message">Campaign line<input name="step${position}Message" maxlength="500" value="${attr(messageLine)}" required /></label></div></div>`;
+function dripStep(position, delayMinutes, messageLine, enabled, locked = false) {
+  const exactDays = delayMinutes > 0 && delayMinutes % 1440 === 0;
+  const delayValue = exactDays ? delayMinutes / 1440 : Math.max(0, Math.round(delayMinutes / 60));
+  const delayUnit = exactDays ? "DAYS" : "HOURS";
+  return `<div class="drip-step"><div class="step-number">${position}</div><div class="step-fields">${locked ? '<input type="hidden" name="step1Enabled" value="on" />' : `<label class="step-toggle"><input type="checkbox" name="step${position}Enabled" ${enabled ? "checked" : ""} /> Use step ${position}</label>`}<div class="step-delay"><label>Wait<input type="number" name="step${position}DelayValue" min="0" max="43200" value="${delayValue}" ${locked ? "readonly" : ""} /></label><label>Unit<select name="step${position}DelayUnit"><option value="HOURS" ${delayUnit === "HOURS" ? "selected" : ""}>Hours</option><option value="DAYS" ${delayUnit === "DAYS" ? "selected" : ""}>Days</option></select></label></div><label class="step-message">Campaign line<input name="step${position}Message" maxlength="1024" value="${attr(messageLine)}" required /></label><label class="step-media">Optional image, video, audio or document<input type="file" name="step${position}Media" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt" /><small>Media automatically uses open-24-hour-window mode.</small></label></div></div>`;
 }
 
 function campaignCard(campaign) {
-  const stats = { total: 0, eligible: 0, active: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, replied: 0, converted: 0, suppressed: 0, ...(campaign.stats || {}) };
-  return `<article class="campaign-card"><div class="campaign-main"><div><span class="status-dot status-${attr(String(campaign.status || "draft").toLowerCase())}"></span><strong>${esc(campaign.name)}</strong><small>${esc(campaign.audienceName || "Audience")} · ${esc(campaign.steps?.length || 0)} step${campaign.steps?.length === 1 ? "" : "s"} · ${esc(pretty(campaign.status))}${campaign.startAt ? ` · ${esc(dateTime(campaign.startAt))}` : ""}</small></div><div class="campaign-actions">${campaignActionButtons(campaign)}</div></div><div class="campaign-stats"><span><strong>${stats.eligible}</strong> enrolled</span><span><strong>${stats.sent}</strong> sent</span><span><strong>${stats.delivered}</strong> delivered</span><span><strong>${stats.read}</strong> read</span><span><strong>${stats.replied}</strong> replied</span><span><strong>${stats.converted}</strong> orders</span><span><strong>${stats.failed}</strong> failed</span><span><strong>${Math.max(stats.skipped, stats.suppressed)}</strong> skipped</span></div></article>`;
+  const stats = { total: 0, eligible: 0, active: 0, waiting: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0, replied: 0, converted: 0, suppressed: 0, ...(campaign.stats || {}) };
+  return `<article class="campaign-card"><div class="campaign-main"><div><span class="status-dot status-${attr(String(campaign.status || "draft").toLowerCase())}"></span><strong>${esc(campaign.name)}</strong><small>${esc(campaign.audienceName || "Audience")} · ${esc(segmentLabel(campaign.relationshipType))} · ${esc(pretty(campaign.deliveryMode || "AUTO"))} · ${esc(campaign.steps?.length || 0)} step${campaign.steps?.length === 1 ? "" : "s"} · ${esc(pretty(campaign.status))}${campaign.startAt ? ` · ${esc(dateTime(campaign.startAt))}` : ""}</small></div><div class="campaign-actions">${campaignActionButtons(campaign)}</div></div><div class="campaign-stats"><span><strong>${stats.eligible}</strong> enrolled</span><span><strong>${stats.waiting}</strong> waiting 24h</span><span><strong>${stats.sent}</strong> sent</span><span><strong>${stats.delivered}</strong> delivered</span><span><strong>${stats.read}</strong> read</span><span><strong>${stats.replied}</strong> replied</span><span><strong>${stats.converted}</strong> orders</span><span><strong>${stats.failed}</strong> failed</span><span><strong>${Math.max(stats.skipped, stats.suppressed)}</strong> skipped</span></div></article>`;
 }
 
 function campaignActionButtons(campaign) {
@@ -2080,7 +2150,7 @@ function campaignActionButtons(campaign) {
   }
   const actions = [button("details", "Details")];
   if (campaign.status === "DRAFT") actions.push(button("submit", "Submit", true));
-  if (campaign.status === "PENDING_APPROVAL") actions.push(button("approve", "Approve", true));
+  if (campaign.status === "PENDING_APPROVAL" && ["OWNER", "ADMIN"].includes(state.session?.role)) actions.push(button("approve", "Approve", true));
   if (campaign.status === "APPROVED") actions.push(button("schedule", "Schedule"), button("start", "Start now", true));
   if (campaign.status === "SCHEDULED") actions.push(button("start", "Start now", true));
   if (campaign.status === "ACTIVE") actions.push(button("pause", "Pause"));
@@ -2108,8 +2178,14 @@ function bindMarketingEvents() {
     document.querySelectorAll("[data-marketing-contact-row]").forEach((row) => { row.hidden = Boolean(needle && !row.dataset.search.includes(needle)); });
   });
   document.querySelectorAll(".consent-action").forEach((button) => button.addEventListener("click", () => recordMarketingConsent(button)));
+  document.querySelector("#batch-audience-form")?.addEventListener("submit", createSegmentAudienceBatches);
   document.querySelector("#audience-form")?.addEventListener("submit", createMarketingAudience);
   document.querySelector("#campaign-form")?.addEventListener("submit", createMarketingCampaign);
+  document.querySelectorAll('#campaign-form input[type="file"]').forEach((input) => input.addEventListener("change", () => {
+    if (!input.files?.length) return;
+    document.querySelector("#campaign-delivery-mode").value = "OPEN_WINDOW_ONLY";
+    notify("Media selected. Delivery changed to open 24-hour window only.");
+  }));
   document.querySelectorAll(".campaign-action").forEach((button) => button.addEventListener("click", () => changeCampaignState(button)));
   document.querySelector("#sync-meta-templates")?.addEventListener("click", syncMetaTemplates);
   document.querySelector("#message-decision-form")?.addEventListener("submit", checkMessageDecision);
@@ -2118,6 +2194,35 @@ function bindMarketingEvents() {
   });
   document.querySelector("#utility-event-form")?.addEventListener("submit", sendUtilityEvent);
   bindRepliedProspectEvents();
+}
+
+async function createSegmentAudienceBatches(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form));
+  const segment = values.relationshipType;
+  if (!confirm(`Create ${segmentLabel(segment).toLowerCase()} lists in batches of ${values.batchSize || 500}? No message will be sent yet.`)) return;
+  const button = event.submitter;
+  button.disabled = true;
+  button.textContent = "Creating batches…";
+  try {
+    const { data } = await api("/marketing/audiences/batches", {
+      method: "POST",
+      body: {
+        name: values.name,
+        description: values.description,
+        relationshipType: segment,
+        batchSize: Number(values.batchSize || 500),
+        onlyOptedIn: values.onlyOptedIn === "on"
+      }
+    });
+    notify(`${data.batchCount} audience batch(es) created for ${data.totalContacts} customers.`);
+    await renderMarketing();
+  } catch (error) {
+    notify(error.message, true);
+    button.disabled = false;
+    button.textContent = "Create batches";
+  }
 }
 
 async function recordMarketingConsent(button) {
@@ -2148,7 +2253,13 @@ async function createMarketingAudience(event) {
   const button = event.submitter;
   button.disabled = true;
   try {
-    await api("/marketing/audiences", { method: "POST", body: { name: values.name, description: values.description, contactIds } });
+    const relationshipType = currentClientSegment();
+    await api("/marketing/audiences", { method: "POST", body: {
+      name: values.name,
+      description: values.description,
+      contactIds,
+      ...(relationshipType === "ALL" ? {} : { relationshipType })
+    } });
     notify("Interested customer list saved.");
     await renderMarketing();
   } catch (error) {
@@ -2161,27 +2272,48 @@ async function createMarketingCampaign(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const values = Object.fromEntries(new FormData(form));
-  const steps = [1, 2, 3].filter((position) => values[`step${position}Enabled`] === "on").map((position) => ({
-    delayDays: Number(values[`step${position}Delay`] || 0),
-    messageLine: values[`step${position}Message`]
-  }));
-  if (!confirm(`Save this ${steps.length}-step marketing campaign as a draft? Only recorded opt-ins can be enrolled later.`)) return;
+  const positions = [1, 2, 3, 4, 5].filter((position) => values[`step${position}Enabled`] === "on");
+  const mediaFiles = positions.map((position) => form.elements[`step${position}Media`]?.files?.[0] || null);
+  const hasMedia = mediaFiles.some(Boolean);
+  const deliveryMode = hasMedia ? "OPEN_WINDOW_ONLY" : values.deliveryMode;
+  if (!confirm(`Save this ${positions.length}-step ${hasMedia ? "media " : ""}campaign as a draft? Only recorded opt-ins can be enrolled later.`)) return;
   const button = event.submitter;
   button.disabled = true;
+  button.textContent = hasMedia ? "Uploading media…" : "Saving draft…";
   try {
+    const uploaded = await Promise.all(mediaFiles.map((file) => file ? uploadMarketingAsset(file) : null));
+    const steps = positions.map((position, index) => {
+      const unit = values[`step${position}DelayUnit`] || "HOURS";
+      const delayValue = Number(values[`step${position}DelayValue`] || 0);
+      const delayMinutes = delayValue * (unit === "DAYS" ? 1440 : 60);
+      const attachment = uploaded[index];
+      return {
+        delayDays: Math.floor(delayMinutes / 1440),
+        delayMinutes,
+        messageLine: values[`step${position}Message`],
+        messageType: attachment ? messageTypeForFile(mediaFiles[index]) : "TEXT",
+        attachmentIds: attachment ? [attachment.attachmentId || attachment.id] : []
+      };
+    });
+    button.textContent = "Saving draft…";
     const campaignBase = state.marketing.strictCampaignLifecycle ? "/campaigns" : "/marketing/campaigns";
     await api(campaignBase, { method: "POST", body: {
       name: values.name,
       audienceId: values.audienceId,
       interestLabel: values.interestLabel,
       templateId: state.marketing.templates[0]?.id || "interest_followup",
+      deliveryMode,
+      trigger: values.trigger,
       steps
     } });
-    notify("Campaign draft saved. Submit it when it is ready for approval.");
+    notify(hasMedia
+      ? "Media drip saved. Closed conversations will wait for the customer's next message."
+      : "Campaign draft saved. Submit it when it is ready for approval.");
     await renderMarketing();
   } catch (error) {
     notify(error.message, true);
     button.disabled = false;
+    button.textContent = "Save campaign draft";
   }
 }
 
@@ -2318,12 +2450,22 @@ function datetimeLocalValue(value) {
 
 async function renderClients(search = "") {
   pageTitle.textContent = "Clients";
+  const segment = currentClientSegment();
+  const directoryTitle = segment === "PROSPECT" ? "Prospect directory" : segment === "EXISTING_CLIENT" ? "Existing client directory" : "Client directory";
+  const directoryDescription = segment === "PROSPECT"
+    ? "Prospective customers assigned to Reshu."
+    : segment === "EXISTING_CLIENT"
+      ? "Existing customers and their complete business history, assigned to Ankit."
+      : "Existing clients and prospects, separated by customer type.";
   const query = new URLSearchParams({ limit: "100" });
   if (search) query.set("search", search);
-  const { data } = await api(`/contacts?${query}`);
+  const [{ data }, { data: counts }] = await Promise.all([
+    api(`/contacts?${query}`),
+    api("/contacts/count")
+  ]);
   page.innerHTML = `
-    <div class="section-head"><div><h1>Client directory</h1><p>Existing clients and their complete business history.</p></div></div>
-    <div class="toolbar"><input class="search-input" id="client-search" placeholder="Search company, person, phone or city…" value="${attr(search)}" /><button class="button button-primary" id="add-client">+ Add client</button></div>
+    <div class="section-head"><div><h1>${esc(directoryTitle)}</h1><p>${esc(directoryDescription)}</p></div><span class="count-pill">${formatCount(counts.totalContacts)} visible ${segment === "PROSPECT" ? "prospects" : segment === "EXISTING_CLIENT" ? "clients" : "records"}</span></div>
+    <div class="toolbar"><input class="search-input" id="client-search" placeholder="Search company, person, phone or city…" value="${attr(search)}" /><button class="button button-primary" id="add-client">+ Add ${segment === "PROSPECT" ? "prospect" : "client"}</button></div>
     <div class="table-card"><div class="table-wrap"><table><thead><tr><th>Client</th><th>Phone</th><th>City</th><th>Sales person</th><th>Type</th><th>Last activity</th></tr></thead><tbody>
       ${data.length ? data.map(clientRow).join("") : '<tr><td colspan="6"><div class="empty-state">No clients found.</div></td></tr>'}
     </tbody></table></div></div>`;
@@ -2440,11 +2582,15 @@ async function commitImport() {
 }
 
 function showAddClient() {
+  const segment = currentClientSegment();
+  const fixedType = segment === "ALL" ? null : segment;
+  const defaultType = fixedType || "EXISTING_CLIENT";
   const backdrop = document.createElement("div");
   backdrop.className = "modal-backdrop";
-  backdrop.innerHTML = `<form class="modal" id="client-form"><div class="modal-head"><div><p class="eyebrow">NEW RECORD</p><h3>Add existing client</h3></div><button class="modal-close" type="button">×</button></div>
+  backdrop.innerHTML = `<form class="modal" id="client-form"><div class="modal-head"><div><p class="eyebrow">NEW RECORD</p><h3>Add ${fixedType === "PROSPECT" ? "prospect" : fixedType === "EXISTING_CLIENT" ? "existing client" : "customer"}</h3></div><button class="modal-close" type="button">×</button></div>
     <div class="form-grid">
       <label class="field full">Company / party name<input name="companyName" required /></label>
+      ${fixedType ? `<input type="hidden" name="relationshipType" value="${fixedType}" />` : '<label class="field full">Customer type<select name="relationshipType"><option value="EXISTING_CLIENT">Existing client · Ankit</option><option value="PROSPECT">Prospect · Reshu</option></select></label>'}
       <label class="field">Contact person<input name="contactPerson" /></label>
       <label class="field">Phone<input name="primaryPhone" inputmode="tel" /></label>
       <label class="field">City<input name="city" /></label>
@@ -2466,8 +2612,9 @@ function showAddClient() {
     submit.disabled = true;
     try {
       const values = Object.fromEntries(new FormData(form));
-      const { data } = await api("/contacts", { method: "POST", body: { ...values, relationshipType: "EXISTING_CLIENT", tags: ["EXISTING_CLIENT"], source: "MANUAL" } });
-      close(); notify("Client created successfully."); location.hash = `#client/${data.contactId}`;
+      const relationshipType = values.relationshipType || defaultType;
+      const { data } = await api("/contacts", { method: "POST", body: { ...values, relationshipType, tags: [relationshipType], source: "MANUAL" } });
+      close(); notify(`${relationshipType === "PROSPECT" ? "Prospect" : "Client"} created successfully.`); location.hash = `#client/${data.contactId}`;
     } catch (submitError) {
       error.textContent = submitError.message; error.hidden = false; submit.disabled = false;
     }
@@ -2498,7 +2645,7 @@ function parseTable(text) {
   return rows;
 }
 
-function metric(label, value, note, color) { return `<article class="metric-card ${color}"><span class="metric-label">${esc(label)}</span><strong class="metric-value">${esc(value)}</strong><span class="metric-note">${esc(note)}</span></article>`; }
+function metric(label, value, note, color) { return `<article class="metric-card ${color}"><span class="metric-label">${esc(label)}</span><strong class="metric-value">${esc(formatCount(value))}</strong><span class="metric-note">${esc(note)}</span></article>`; }
 function miniStat(label, value) { return `<div class="mini-stat"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`; }
 function summaryBox(label, value) { return `<div class="summary-box"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`; }
 function info(label, value) { return `<div class="info-row"><small>${esc(label)}</small><strong>${esc(value)}</strong></div>`; }
@@ -2511,6 +2658,7 @@ function orderRow(order) {
   return `<tr><td>${esc(date(order.orderDate || order.createdAt))}</td><td>${esc(order.notes?.split("\n")[0]?.replace(/^Rate details:\s*/, "") || "Order")}</td><td><span class="badge ${status === "DISPATCHED" ? "green" : status.includes("DESIGN") ? "blue" : "amber"}">${esc(pretty(status))}</span></td><td>${esc(order.designerName || "—")}</td><td>${esc(money(order.totalAmount))}</td><td><span class="badge ${order.paymentStatus === "PAID" ? "green" : order.paymentStatus === "PARTIAL" ? "amber" : "red"}">${esc(pretty(order.paymentStatus || "PENDING"))}</span></td></tr>`;
 }
 function money(value) { return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(Number(value || 0)); }
+function formatCount(value) { return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(Number(value || 0)); }
 function date(value) {
   if (!value) return "—";
   const parsed = value?._seconds ? new Date(value._seconds * 1000) : new Date(value);

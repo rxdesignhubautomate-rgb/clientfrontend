@@ -1,6 +1,6 @@
-# RX Client CRM frontend v1.5.2 deployment
+# RX Client CRM frontend v1.7.0 deployment
 
-1. Deploy backend v2.3.2 first.
+1. Deploy backend v2.7.0 first.
 2. In Vercel, import this frontend project or upload the project files.
 3. Set `CRM_API_BASE_URL=https://rxclientsbases.onrender.com/api/v1` for Production.
 4. Redeploy without using an old build cache.
@@ -9,6 +9,14 @@
 7. Open **Marketing** and click **Sync from Meta** before starting a campaign.
 
 The campaign workflow is: **Draft → Submit → Approve → Schedule/Start**.
+
+The client and campaign workspace is segmented automatically:
+
+- Ankit sees Existing Clients.
+- Reshu sees Prospects and Leads.
+- Admin/Owner can select either customer type.
+- Use **Create 500-contact campaign lists** to split a large segment into safe batches.
+- Choose **Open 24h window only** for image, video, audio, or document drip steps. Closed customers wait until their next inbound WhatsApp reply; the CRM does not disguise marketing as Utility.
 
 Only Meta templates with an **Approved** status can be used for template sends. Transactional update forms require real Firestore order or quotation IDs linked to the selected customer.
 

@@ -336,6 +336,10 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .compliance-banner { display: flex; align-items: flex-start; gap: 13px; margin-bottom: 18px; padding: 16px 18px; border: 1px solid #cfece3; border-radius: 16px; color: #275d50; background: #effbf7; }
 .compliance-icon { display: grid; flex: 0 0 28px; place-items: center; width: 28px; height: 28px; border-radius: 50%; color: white; background: #28aa89; font-weight: 900; }
 .compliance-banner strong { font-size: 13px; }.compliance-banner p { margin: 4px 0 0; color: #5f8178; font-size: 12px; line-height: 1.5; }
+.segment-batch-panel { margin-bottom: 18px; border-color: #dce4ff; background: linear-gradient(135deg, #fff 0%, #f7f9ff 100%); }
+.batch-audience-form { margin-top: 16px; }.batch-audience-form .compact-grid { margin-top: 0; }
+.batch-audience-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 13px; }
+.batch-audience-actions .campaign-confirm { max-width: 620px; }
 .policy-center-panel { margin-bottom: 18px; }
 .compatibility-panel { border-color: #ead9ad; background: #fffaf0; }.compatibility-panel h3 { color: #59451b; }.compatibility-panel .panel-title-row p:not(.eyebrow) { max-width: 780px; color: #7e6b40; }
 .compatibility-note { margin-top: 14px; padding: 10px 12px; border-radius: 10px; color: #796230; background: #fff5dc; font-size: 10px; line-height: 1.45; }
@@ -406,9 +410,11 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .drip-step { display: flex; gap: 10px; padding: 11px; border: 1px solid #e4e7ef; border-radius: 13px; background: #fafbfe; }
 .step-number { display: grid; flex: 0 0 27px; place-items: center; width: 27px; height: 27px; border-radius: 9px; color: white; background: #3e5cf1; font-size: 11px; font-weight: 900; }
 .step-fields { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 7px; flex: 1; min-width: 0; }
-.step-fields label { color: #79869a; font-size: 9px; font-weight: 800; }.step-fields input { width: 100%; height: 34px; margin-top: 4px; padding: 0 8px; border: 1px solid #dce2ed; border-radius: 8px; outline: none; background: white; font-size: 10px; }
+.step-fields label { color: #79869a; font-size: 9px; font-weight: 800; }.step-fields input, .step-fields select { width: 100%; height: 34px; margin-top: 4px; padding: 0 8px; border: 1px solid #dce2ed; border-radius: 8px; outline: none; background: white; font-size: 10px; }
 .step-fields .step-toggle { grid-column: span 2; display: flex; align-items: center; gap: 6px; color: #42516a; }.step-fields .step-toggle input { width: auto; height: auto; margin: 0; }
-.step-message { min-width: 0; }.campaign-confirm { display: flex; align-items: flex-start; gap: 8px; color: #657187; font-size: 10px; line-height: 1.45; }.campaign-confirm input { margin-top: 2px; }
+.step-delay { grid-column: span 2; display: grid; grid-template-columns: minmax(80px, .55fr) minmax(95px, .45fr); gap: 7px; }
+.step-message, .step-media { grid-column: span 2; min-width: 0; }.step-media input[type="file"] { height: auto; padding: 7px; }.step-media small { display: block; margin-top: 4px; color: #98a3b4; font-size: 8px; font-weight: 600; }
+.campaign-confirm { display: flex; align-items: flex-start; gap: 8px; color: #657187; font-size: 10px; line-height: 1.45; }.campaign-confirm input { margin-top: 2px; }
 .tiny-note { margin: -4px 0 0; text-align: center; font-size: 9px; line-height: 1.4; }
 .campaign-list-panel { margin-top: 18px; }
 .campaign-list { display: grid; gap: 10px; margin-top: 17px; }
@@ -416,7 +422,7 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .campaign-main > div { position: relative; padding-left: 17px; }.campaign-main strong, .campaign-main small { display: block; }.campaign-main small { margin-top: 4px; color: #8995a7; font-size: 10px; }
 .campaign-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; padding-left: 0 !important; }.campaign-actions .button { min-height: 34px; padding: 7px 10px; font-size: 9px; }
 .status-dot { position: absolute; top: 4px; left: 0; width: 8px; height: 8px; border-radius: 50%; background: #9aa5b6; }.status-active { background: #2dbf9d; box-shadow: 0 0 0 4px rgba(45,191,157,.12); }.status-approved, .status-scheduled { background: #4d6be8; }.status-pending_approval { background: #9b6bd7; }.status-paused { background: #e59c2b; }.status-completed { background: #6075df; }.status-cancelled, .status-failed { background: #d05264; }
-.campaign-stats { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 6px; margin-top: 12px; }
+.campaign-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(74px, 1fr)); gap: 6px; margin-top: 12px; }
 .campaign-stats span { padding: 8px; border-radius: 9px; color: #8995a8; background: white; text-align: center; font-size: 9px; }.campaign-stats strong { display: block; margin-bottom: 2px; color: #334159; font-size: 13px; }
 .campaign-detail-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 18px 0; }.campaign-detail-meta span { padding: 10px; border-radius: 10px; color: #8793a4; background: #f5f7fa; font-size: 9px; }.campaign-detail-meta strong { display: block; margin-top: 3px; color: #36445a; font-size: 11px; }.campaign-detail-modal h4 { margin: 18px 0 9px; }.campaign-recipient-list { display: grid; gap: 6px; max-height: 330px; overflow: auto; }.campaign-recipient-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 10px; border-radius: 9px; background: #f7f8fb; font-size: 9px; }.campaign-recipient-list span { color: #a23d4d; font-weight: 800; }
 
