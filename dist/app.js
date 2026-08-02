@@ -1868,7 +1868,7 @@ function freshMarketingState() {
   return {
     contacts: [], orders: [], utilityBatchContacts: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
     metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyLoadError: null, userLoadError: null, utilityClientLoadError: null,
-    strictCampaignLifecycle: false, replyFilter: "ALL", decision: null, utilityBatchResult: null
+    strictCampaignLifecycle: false, replyFilter: "ALL", decision: null, utilityBatchResult: null, utilityBatchIndex: 0
   };
 }
 
@@ -1928,7 +1928,8 @@ async function renderMarketing() {
     strictCampaignLifecycle: campaignsResponse.route?.startsWith("/campaigns") === true,
     decision: state.marketing.decision || null,
     replyFilter: state.marketing.replyFilter || "ALL",
-    utilityBatchResult: state.marketing.utilityBatchResult || null
+    utilityBatchResult: state.marketing.utilityBatchResult || null,
+    utilityBatchIndex: state.marketing.utilityBatchIndex || 0
   };
   const stats = aggregateCampaignStats(state.marketing.campaigns);
   const template = state.marketing.templates.find((item) => item.id === "interest_followup")
@@ -2114,6 +2115,13 @@ function renderVerifiedOrderBatch(templateApproved) {
   const orderByContact = new Map(orders.map((order) => [order.contactId, order]));
   const clients = state.marketing.utilityBatchContacts || [];
   const eligibleCount = clients.filter((contact) => utilityBatchClientEligibility(contact, orderByContact.get(contact.contactId)).eligible).length;
+  const batchCount = Math.ceil(eligibleCount / 50);
+  const batchIndex = Math.min(Number(state.marketing.utilityBatchIndex || 0), Math.max(batchCount - 1, 0));
+  const batchOptions = Array.from({ length: batchCount }, (_, index) => {
+    const start = index * 50 + 1;
+    const end = Math.min((index + 1) * 50, eligibleCount);
+    return `<option value="${index}" ${index === batchIndex ? "selected" : ""}>Batch ${index + 1} of ${batchCount} · clients ${start}-${end}</option>`;
+  }).join("");
   const result = state.marketing.utilityBatchResult;
   return `<section class="panel utility-batch-panel">
     <div class="panel-title-row"><div><p class="eyebrow">VERIFIED ORDER BATCH</p><h3>All existing clients</h3><p>Every existing client is listed once. Select up to 50 clients whose real active order and WhatsApp number are available.</p></div><span class="count-pill">${clients.length} total · ${eligibleCount} eligible</span></div>
@@ -2123,10 +2131,9 @@ function renderVerifiedOrderBatch(templateApproved) {
     <form id="verified-order-batch-form" class="policy-form">
       <label class="field utility-batch-video">Video used by the approved Utility template<input name="batchOrderVideo" type="file" accept="video/*" required ${templateApproved ? "" : "disabled"} /><small>This must be an order-confirmation video, not an offer, catalogue, cross-sell or promotion.</small></label>
       <input id="utility-client-search" class="search-input" placeholder="Search all existing clients by company, person, phone or city..." />
-      <div class="utility-batch-toolbar"><label><input id="select-all-utility-orders" type="checkbox" ${templateApproved && eligibleCount ? "" : "disabled"} /> Select first 50 visible eligible clients</label><strong id="utility-order-selection-count">0 selected</strong></div>
+      <div class="utility-batch-toolbar"><label>Ready-to-send batch<select id="utility-batch-picker" name="utilityBatchIndex" ${batchCount ? "" : "disabled"}>${batchOptions || '<option value="0">No eligible batch</option>'}</select></label><strong id="utility-order-selection-count">0 selected</strong></div>
       <div class="utility-order-list">${clients.length ? clients.map((contact) => utilityBatchClientRow(contact, orderByContact.get(contact.contactId))).join("") : '<div class="empty-state">No existing clients were found.</div>'}</div>
-      <label class="campaign-confirm"><input name="confirmTransactionalUse" type="checkbox" required /> I confirm this video is a genuine update for the selected orders and contains no promotional content.</label>
-      <button type="submit" class="button button-primary button-full" ${templateApproved && eligibleCount ? "" : "disabled"}>Verify & queue selected orders</button>
+      <button type="submit" class="button button-primary button-full" ${templateApproved && eligibleCount ? "" : "disabled"}>Send this 50-client Utility batch</button>
     </form>
     ${result ? renderUtilityBatchResult(result) : '<p class="muted policy-helper">No message is sent until you select orders and confirm this form.</p>'}
   </section>`;
@@ -2429,15 +2436,19 @@ function bindMarketingEvents() {
   document.querySelector("#utility-client-search")?.addEventListener("input", (event) => {
     const needle = event.target.value.trim().toLowerCase();
     document.querySelectorAll("[data-utility-client-row]").forEach((row) => { row.hidden = Boolean(needle && !row.dataset.search.includes(needle)); });
-    const selectVisible = document.querySelector("#select-all-utility-orders");
-    if (selectVisible) selectVisible.checked = false;
   });
-  document.querySelector("#select-all-utility-orders")?.addEventListener("change", (event) => {
-    const visible = [...document.querySelectorAll("[data-utility-order-id]")].filter((checkbox) => !checkbox.closest("[data-utility-client-row]").hidden);
+  const applyReadyUtilityBatch = () => {
+    const picker = document.querySelector("#utility-batch-picker");
+    const batchIndex = Number(picker?.value || 0);
+    state.marketing.utilityBatchIndex = batchIndex;
+    const start = batchIndex * 50;
+    const end = start + 50;
     document.querySelectorAll("[data-utility-order-id]").forEach((checkbox) => { checkbox.checked = false; });
-    visible.forEach((checkbox, index) => { checkbox.checked = event.target.checked && index < 50; });
+    [...document.querySelectorAll("[data-utility-order-id]")].slice(start, end).forEach((checkbox) => { checkbox.checked = true; });
     updateUtilityOrderCount();
-  });
+  };
+  document.querySelector("#utility-batch-picker")?.addEventListener("change", applyReadyUtilityBatch);
+  applyReadyUtilityBatch();
   document.querySelector("#verified-order-batch-form")?.addEventListener("submit", sendVerifiedOrderBatch);
   bindRepliedProspectEvents();
 }
@@ -2768,12 +2779,15 @@ async function sendVerifiedOrderBatch(event) {
       }
     });
     state.marketing.utilityBatchResult = data;
+    const totalBatches = Math.ceil(document.querySelectorAll("[data-utility-order-id]").length / 50);
+    const currentBatch = Number(form.elements.utilityBatchIndex?.value || 0);
+    state.marketing.utilityBatchIndex = Math.min(currentBatch + 1, Math.max(totalBatches - 1, 0));
     notify(`${data.queued} verified order update(s) queued; ${data.skipped} skipped; ${data.failed} failed.`, Boolean(data.failed));
     await renderMarketing();
   } catch (error) {
     notify(error.message, true);
     button.disabled = false;
-    button.textContent = "Verify & queue selected orders";
+    button.textContent = "Send this 50-client Utility batch";
   }
 }
 
