@@ -2114,6 +2114,7 @@ function renderVerifiedOrderBatch(templateApproved) {
   const orders = eligibleUtilityBatchOrders();
   const orderByContact = new Map(orders.map((order) => [order.contactId, order]));
   const clients = state.marketing.utilityBatchContacts || [];
+  const activeClientCount = clients.filter((contact) => contact.status !== "BLOCKED" && contact.suppressed !== true).length;
   const eligibleCount = clients.filter((contact) => utilityBatchClientEligibility(contact, orderByContact.get(contact.contactId)).eligible).length;
   const batchCount = Math.ceil(eligibleCount / 50);
   const batchIndex = Math.min(Number(state.marketing.utilityBatchIndex || 0), Math.max(batchCount - 1, 0));
@@ -2124,7 +2125,7 @@ function renderVerifiedOrderBatch(templateApproved) {
   }).join("");
   const result = state.marketing.utilityBatchResult;
   return `<section class="panel utility-batch-panel">
-    <div class="panel-title-row"><div><p class="eyebrow">VERIFIED ORDER BATCH</p><h3>All existing clients</h3><p>Every existing client is listed once. Select up to 50 clients whose real active order and WhatsApp number are available.</p></div><span class="count-pill">${clients.length} total · ${eligibleCount} eligible</span></div>
+    <div class="panel-title-row"><div><p class="eyebrow">VERIFIED ORDER BATCH</p><h3>All active existing clients</h3><p>Every existing client is an active CRM relationship. Order-confirmation sending is shown separately according to the current linked order and WhatsApp number.</p></div><span class="count-pill">${activeClientCount} active clients · ${eligibleCount} order-ready</span></div>
     ${templateApproved ? "" : '<div class="form-error policy-error">Sync Meta first. The approved Video-header template <strong>rx_order_confirmation</strong> is required.</div>'}
     ${state.marketing.orderLoadError ? `<div class="form-error policy-error">Orders could not load: ${esc(state.marketing.orderLoadError)}</div>` : ""}
     ${state.marketing.utilityClientLoadError ? `<div class="form-error policy-error">Existing clients could not fully load: ${esc(state.marketing.utilityClientLoadError)}</div>` : ""}
@@ -2152,7 +2153,7 @@ function eligibleUtilityBatchOrders() {
 function utilityBatchClientEligibility(contact, order) {
   if (contact.status === "BLOCKED" || contact.suppressed === true) return { eligible: false, reason: "Blocked / suppressed" };
   if (String(contact.primaryPhone || "").replace(/\D/g, "").length < 10) return { eligible: false, reason: "WhatsApp number missing" };
-  if (!order) return { eligible: false, reason: "No active linked order" };
+  if (!order) return { eligible: false, reason: "Current order not linked" };
   return { eligible: true, reason: null };
 }
 
@@ -2161,7 +2162,8 @@ function utilityBatchClientRow(contact, order) {
   const eligibility = utilityBatchClientEligibility(contact, order);
   const reference = order ? (order.orderNumber || order.externalOrderId || order.orderId) : null;
   const search = `${customer} ${contact.contactPerson || ""} ${contact.primaryPhone || ""} ${contact.city || ""}`.toLowerCase();
-  return `<label class="utility-order-row ${eligibility.eligible ? "" : "ineligible"}" data-utility-client-row data-search="${attr(search)}"><input type="checkbox" ${eligibility.eligible ? `data-utility-order-id="${attr(order.orderId)}"` : "disabled"} /><span><strong>${esc(customer)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "City not set")}</small></span><b>${eligibility.eligible ? `${esc(reference)} · ${esc(pretty(order.status || "ACTIVE"))}` : esc(eligibility.reason)}</b></label>`;
+  const clientState = contact.status === "BLOCKED" || contact.suppressed === true ? "Blocked client" : "Active client";
+  return `<label class="utility-order-row ${eligibility.eligible ? "" : "ineligible"}" data-utility-client-row data-search="${attr(search)}"><input type="checkbox" ${eligibility.eligible ? `data-utility-order-id="${attr(order.orderId)}"` : "disabled"} /><span><strong>${esc(customer)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "City not set")} <i class="utility-client-state">${esc(clientState)}</i></small></span><b>${eligibility.eligible ? `${esc(reference)} · ${esc(pretty(order.status || "ACTIVE"))}` : esc(eligibility.reason)}</b></label>`;
 }
 
 function utilityBatchOrderRow(order) {
@@ -2340,14 +2342,15 @@ function campaignTemplateHeaderMedia(template, inputName = "templateHeaderMedia"
 function renderDirectExistingCampaign(template) {
   if (!["OWNER", "ADMIN"].includes(state.session?.role) || !template) return "";
   return `<section class="panel direct-existing-panel">
-    <div class="panel-title-row"><div><p class="eyebrow">ONE-CLICK EXISTING CLIENT SEND</p><h3>Schedule directly to all eligible existing clients</h3><p>No manual contact selection. The backend includes only existing clients whose WhatsApp marketing opt-in is already recorded, creates batches of up to 500, and staggers them automatically.</p></div><span class="badge blue">Owner/Admin</span></div>
+    <div class="panel-title-row"><div><p class="eyebrow">DAILY 220 EXISTING CLIENT SEND</p><h3>Schedule one opted-in client batch per day</h3><p>No manual contact selection. The backend includes only eligible existing clients, creates daily batches of up to 220 and preserves every opt-out.</p></div><span class="badge blue">Owner/Admin</span></div>
+    <div class="direct-existing-preview"><button type="button" class="button button-secondary" id="direct-existing-preview-btn">Preview eligible clients</button><span id="direct-existing-preview-out" class="muted"></span></div>
     <form id="direct-existing-campaign-form" class="campaign-form">
       <div class="form-grid compact-grid">
         <label class="field">Campaign name<input name="name" required placeholder="e.g. August visual aid promotion" /></label>
         <label class="field">Product or interest<input name="interestLabel" required placeholder="e.g. visual aid designing" /></label>
         <label class="field">Approved Meta template<select name="templateId" id="direct-existing-template" required>${state.marketing.templates.map((item) => `<option value="${attr(item.id)}" ${item.id === template.id ? "selected" : ""}>${esc(item.label || item.name)} · ${esc(item.name)}</option>`).join("")}</select></label>
-        <label class="field">Contacts per batch<input name="batchSize" type="number" min="1" max="500" value="500" required /></label>
-        <label class="field">Gap between batches (minutes)<input name="intervalMinutes" type="number" min="5" max="240" value="10" required /></label>
+        <label class="field">Contacts per day (batch)<input name="batchSize" type="number" min="1" max="250" value="220" required /></label>
+        <label class="field">Send one batch every N day(s)<input name="intervalDays" type="number" min="1" max="60" value="1" required /></label>
         <label class="field">Start time (optional)<input name="startAt" type="datetime-local" /></label>
       </div>
       <div id="direct-existing-template-preview">${campaignTemplatePreview(template)}</div>
@@ -2405,6 +2408,7 @@ function bindMarketingEvents() {
   document.querySelectorAll(".consent-action").forEach((button) => button.addEventListener("click", () => recordMarketingConsent(button)));
   document.querySelector("#batch-audience-form")?.addEventListener("submit", createSegmentAudienceBatches);
   document.querySelector("#direct-existing-campaign-form")?.addEventListener("submit", createDirectExistingCampaigns);
+  document.querySelector("#direct-existing-preview-btn")?.addEventListener("click", previewDirectExistingAudience);
   document.querySelector("#direct-existing-template")?.addEventListener("change", updateDirectExistingTemplateUi);
   document.querySelector("#audience-form")?.addEventListener("submit", createMarketingAudience);
   document.querySelector("#campaign-form")?.addEventListener("submit", createMarketingCampaign);
@@ -2512,7 +2516,7 @@ async function createDirectExistingCampaigns(event) {
   const startDescription = values.startAt
     ? `starting ${dateTime(new Date(values.startAt))}`
     : "starting in about two minutes";
-  if (!confirm(`Schedule ${template?.name || "the approved template"} for every eligible existing client in automatic 500-contact batches, ${startDescription}?`)) return;
+  if (!confirm(`Schedule ${template?.name || "the approved template"} for ${values.batchSize || 220} eligible existing clients per day, one batch every ${values.intervalDays || 1} day(s), ${startDescription}?`)) return;
   const button = event.submitter;
   button.disabled = true;
   button.textContent = headerFile ? "Uploading template media…" : "Scheduling campaigns…";
@@ -2527,19 +2531,39 @@ async function createDirectExistingCampaigns(event) {
         interestLabel: values.interestLabel,
         templateId: values.templateId,
         ...(attachment ? { templateHeaderAttachmentId: attachment.attachmentId || attachment.id } : {}),
-        batchSize: Number(values.batchSize || 500),
-        intervalMinutes: Number(values.intervalMinutes || 10),
+        batchSize: Number(values.batchSize || 220),
+        intervalDays: Number(values.intervalDays || 1),
         ...(values.startAt ? { startAt: new Date(values.startAt).toISOString() } : {}),
         messageLine: `Approved ${template?.name || "marketing"} template for existing clients`,
         confirmOptIn: values.confirmOptIn === "on"
       }
     });
-    notify(`${data.totalContacts} opted-in existing clients scheduled across ${data.batchCount} batch campaign(s).`);
+    notify(`${data.totalContacts} opted-in existing clients scheduled at ${data.batchSize}/day across ${data.batchCount} daily batch(es).`);
     await renderMarketing();
   } catch (error) {
     notify(error.message, true);
     button.disabled = false;
     button.textContent = "Schedule eligible existing clients";
+  }
+}
+
+async function previewDirectExistingAudience(event) {
+  const button = event.currentTarget;
+  const output = document.querySelector("#direct-existing-preview-out");
+  const form = document.querySelector("#direct-existing-campaign-form");
+  const batchSize = Number(form?.elements?.batchSize?.value || 220);
+  button.disabled = true;
+  if (output) output.textContent = "Checking eligibility...";
+  try {
+    const { data } = await api(`/campaigns/direct-existing/preview?batchSize=${encodeURIComponent(batchSize)}`);
+    const skipped = Object.values(data.suppressed || {}).reduce((total, value) => total + Number(value || 0), 0);
+    if (output) {
+      output.textContent = `${data.addressable} of ${data.totalExistingClients} eligible · ${data.batchSize}/day · ${data.daysToComplete} day(s) · ${skipped} skipped`;
+    }
+  } catch (error) {
+    if (output) output.textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 }
 
