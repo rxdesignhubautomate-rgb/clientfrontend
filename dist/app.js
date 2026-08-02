@@ -1866,8 +1866,8 @@ function freshWhatsappState() {
 }
 function freshMarketingState() {
   return {
-    contacts: [], orders: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
-    metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyLoadError: null, userLoadError: null,
+    contacts: [], orders: [], utilityBatchContacts: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
+    metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyLoadError: null, userLoadError: null, utilityClientLoadError: null,
     strictCampaignLifecycle: false, replyFilter: "ALL", decision: null, utilityBatchResult: null
   };
 }
@@ -1894,15 +1894,10 @@ function segmentOptions() {
 }
 
 const ORDER_STATUSES = ["CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION", "READY_TO_DISPATCH", "DISPATCHED", "DELIVERED", "ON_HOLD", "CANCELLED"];
-const UTILITY_BATCH_ACTIVE_STATUSES = [...new Set([
-  ...ORDER_STATUSES.filter((status) => !["CANCELLED", "DELIVERED", "DISPATCHED"].includes(status)),
-  "ORDER_RECEIVED", "IN_PROGRESS", "DESIGNING", "APPROVAL", "APPROVED", "PRINT_BIND", "PRODUCTION",
-  "READY_TO_SHIP", "READY_FOR_DISPATCH", "PAYMENT_PENDING", "PENDING", "PROCESSING", "WORK_STARTED"
-])];
 
 async function renderMarketing() {
   pageTitle.textContent = "Marketing";
-  const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse, repliedResponse, usersResponse, metaTemplatesResponse, configuredTemplatesResponse, ordersResponse] = await Promise.all([
+  const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse, repliedResponse, usersResponse, metaTemplatesResponse, configuredTemplatesResponse, ordersResponse, utilityClientsResponse] = await Promise.all([
     marketingApi("/contacts?limit=100", "Customers"),
     marketingApi("/marketing/audiences?limit=100", "Interested lists"),
     firstAvailableMarketingApi(["/campaigns?limit=100", "/marketing/campaigns?limit=100"], "Campaigns"),
@@ -1911,11 +1906,13 @@ async function renderMarketing() {
     optionalMarketingApi("/users?limit=100"),
     optionalMarketingApi("/whatsapp/templates?limit=100"),
     optionalMarketingApi("/whatsapp/templates/configured"),
-    loadEligibleUtilityOrders()
+    loadEligibleUtilityOrders(),
+    loadAllExistingClients()
   ]);
   state.marketing = {
     contacts: contactsResponse.data || [],
     orders: ordersResponse.data || [],
+    utilityBatchContacts: utilityClientsResponse.data || [],
     audiences: audiencesResponse.data || [],
     campaigns: campaignsResponse.data || [],
     templates: templatesResponse.data || [],
@@ -1927,6 +1924,7 @@ async function renderMarketing() {
     replyLoadError: repliedResponse.error || null,
     userLoadError: usersResponse.error || null,
     orderLoadError: ordersResponse.error || null,
+    utilityClientLoadError: utilityClientsResponse.error || null,
     strictCampaignLifecycle: campaignsResponse.route?.startsWith("/campaigns") === true,
     decision: state.marketing.decision || null,
     replyFilter: state.marketing.replyFilter || "ALL",
@@ -2022,18 +2020,27 @@ async function optionalMarketingApi(path) {
 }
 
 async function loadEligibleUtilityOrders() {
-  const responses = await Promise.all(UTILITY_BATCH_ACTIVE_STATUSES.map((status) => (
-    optionalMarketingApi(`/orders?status=${encodeURIComponent(status)}&limit=100&sortBy=updatedAt&sortOrder=desc`)
-  )));
-  const unique = new Map();
-  for (const response of responses) {
-    for (const order of response.data || []) unique.set(order.orderId, order);
+  return loadAllBatchPages("/events/order-confirmed/batch/orders?limit=1000");
+}
+
+async function loadAllExistingClients() {
+  return loadAllBatchPages("/events/order-confirmed/batch/clients?limit=1000");
+}
+
+async function loadAllBatchPages(path, maxPages = 25) {
+  const items = [];
+  let cursor = null;
+  try {
+    for (let pageNumber = 0; pageNumber < maxPages; pageNumber += 1) {
+      const response = await api(`${path}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`);
+      items.push(...(response.data || []));
+      cursor = response.pagination?.nextCursor || null;
+      if (!cursor) return { data: items, error: null, truncated: false };
+    }
+    return { data: items, error: "Only the first 25,000 records were loaded", truncated: true };
+  } catch (error) {
+    return { data: items, error: error.message, truncated: false };
   }
-  const data = [...unique.values()]
-    .sort((left, right) => new Date(right.updatedAt || right.createdAt || 0) - new Date(left.updatedAt || left.createdAt || 0))
-    .slice(0, 100);
-  const failures = responses.map((response) => response.error).filter(Boolean);
-  return { data, error: failures.length === responses.length ? failures[0] : null };
 }
 
 async function firstAvailableMarketingApi(paths, label) {
@@ -2104,17 +2111,22 @@ function renderWhatsAppPolicyTools() {
 function renderVerifiedOrderBatch(templateApproved) {
   if (!["OWNER", "ADMIN"].includes(state.session?.role)) return "";
   const orders = eligibleUtilityBatchOrders();
+  const orderByContact = new Map(orders.map((order) => [order.contactId, order]));
+  const clients = state.marketing.utilityBatchContacts || [];
+  const eligibleCount = clients.filter((contact) => utilityBatchClientEligibility(contact, orderByContact.get(contact.contactId)).eligible).length;
   const result = state.marketing.utilityBatchResult;
   return `<section class="panel utility-batch-panel">
-    <div class="panel-title-row"><div><p class="eyebrow">VERIFIED ORDER BATCH</p><h3>Send order-confirmation video in batches</h3><p>Select up to 50 companies with real, active CRM orders. Both imported and Process App order statuses are supported.</p></div><span class="count-pill">${orders.length} eligible companies</span></div>
+    <div class="panel-title-row"><div><p class="eyebrow">VERIFIED ORDER BATCH</p><h3>All existing clients</h3><p>Every existing client is listed once. Select up to 50 clients whose real active order and WhatsApp number are available.</p></div><span class="count-pill">${clients.length} total · ${eligibleCount} eligible</span></div>
     ${templateApproved ? "" : '<div class="form-error policy-error">Sync Meta first. The approved Video-header template <strong>rx_order_confirmation</strong> is required.</div>'}
     ${state.marketing.orderLoadError ? `<div class="form-error policy-error">Orders could not load: ${esc(state.marketing.orderLoadError)}</div>` : ""}
+    ${state.marketing.utilityClientLoadError ? `<div class="form-error policy-error">Existing clients could not fully load: ${esc(state.marketing.utilityClientLoadError)}</div>` : ""}
     <form id="verified-order-batch-form" class="policy-form">
       <label class="field utility-batch-video">Video used by the approved Utility template<input name="batchOrderVideo" type="file" accept="video/*" required ${templateApproved ? "" : "disabled"} /><small>This must be an order-confirmation video, not an offer, catalogue, cross-sell or promotion.</small></label>
-      <div class="utility-batch-toolbar"><label><input id="select-all-utility-orders" type="checkbox" ${templateApproved && orders.length ? "" : "disabled"} /> Select first 50 eligible orders</label><strong id="utility-order-selection-count">0 selected</strong></div>
-      <div class="utility-order-list">${orders.length ? orders.map(utilityBatchOrderRow).join("") : '<div class="empty-state">No recent active orders with a linked client were found.</div>'}</div>
+      <input id="utility-client-search" class="search-input" placeholder="Search all existing clients by company, person, phone or city..." />
+      <div class="utility-batch-toolbar"><label><input id="select-all-utility-orders" type="checkbox" ${templateApproved && eligibleCount ? "" : "disabled"} /> Select first 50 visible eligible clients</label><strong id="utility-order-selection-count">0 selected</strong></div>
+      <div class="utility-order-list">${clients.length ? clients.map((contact) => utilityBatchClientRow(contact, orderByContact.get(contact.contactId))).join("") : '<div class="empty-state">No existing clients were found.</div>'}</div>
       <label class="campaign-confirm"><input name="confirmTransactionalUse" type="checkbox" required /> I confirm this video is a genuine update for the selected orders and contains no promotional content.</label>
-      <button type="submit" class="button button-primary button-full" ${templateApproved && orders.length ? "" : "disabled"}>Verify & queue selected orders</button>
+      <button type="submit" class="button button-primary button-full" ${templateApproved && eligibleCount ? "" : "disabled"}>Verify & queue selected orders</button>
     </form>
     ${result ? renderUtilityBatchResult(result) : '<p class="muted policy-helper">No message is sent until you select orders and confirm this form.</p>'}
   </section>`;
@@ -2128,6 +2140,21 @@ function eligibleUtilityBatchOrders() {
     if (!newestOrderByCompany.has(order.contactId)) newestOrderByCompany.set(order.contactId, order);
   }
   return [...newestOrderByCompany.values()];
+}
+
+function utilityBatchClientEligibility(contact, order) {
+  if (contact.status === "BLOCKED" || contact.suppressed === true) return { eligible: false, reason: "Blocked / suppressed" };
+  if (String(contact.primaryPhone || "").replace(/\D/g, "").length < 10) return { eligible: false, reason: "WhatsApp number missing" };
+  if (!order) return { eligible: false, reason: "No active linked order" };
+  return { eligible: true, reason: null };
+}
+
+function utilityBatchClientRow(contact, order) {
+  const customer = contact.companyName || contact.contactPerson || contact.primaryPhone || contact.contactId;
+  const eligibility = utilityBatchClientEligibility(contact, order);
+  const reference = order ? (order.orderNumber || order.externalOrderId || order.orderId) : null;
+  const search = `${customer} ${contact.contactPerson || ""} ${contact.primaryPhone || ""} ${contact.city || ""}`.toLowerCase();
+  return `<label class="utility-order-row ${eligibility.eligible ? "" : "ineligible"}" data-utility-client-row data-search="${attr(search)}"><input type="checkbox" ${eligibility.eligible ? `data-utility-order-id="${attr(order.orderId)}"` : "disabled"} /><span><strong>${esc(customer)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "City not set")}</small></span><b>${eligibility.eligible ? `${esc(reference)} · ${esc(pretty(order.status || "ACTIVE"))}` : esc(eligibility.reason)}</b></label>`;
 }
 
 function utilityBatchOrderRow(order) {
@@ -2399,8 +2426,16 @@ function bindMarketingEvents() {
     if (label) label.textContent = `${count} selected`;
   };
   document.querySelectorAll("[data-utility-order-id]").forEach((checkbox) => checkbox.addEventListener("change", updateUtilityOrderCount));
+  document.querySelector("#utility-client-search")?.addEventListener("input", (event) => {
+    const needle = event.target.value.trim().toLowerCase();
+    document.querySelectorAll("[data-utility-client-row]").forEach((row) => { row.hidden = Boolean(needle && !row.dataset.search.includes(needle)); });
+    const selectVisible = document.querySelector("#select-all-utility-orders");
+    if (selectVisible) selectVisible.checked = false;
+  });
   document.querySelector("#select-all-utility-orders")?.addEventListener("change", (event) => {
-    document.querySelectorAll("[data-utility-order-id]").forEach((checkbox, index) => { checkbox.checked = event.target.checked && index < 50; });
+    const visible = [...document.querySelectorAll("[data-utility-order-id]")].filter((checkbox) => !checkbox.closest("[data-utility-client-row]").hidden);
+    document.querySelectorAll("[data-utility-order-id]").forEach((checkbox) => { checkbox.checked = false; });
+    visible.forEach((checkbox, index) => { checkbox.checked = event.target.checked && index < 50; });
     updateUtilityOrderCount();
   });
   document.querySelector("#verified-order-batch-form")?.addEventListener("submit", sendVerifiedOrderBatch);

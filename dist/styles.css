@@ -370,6 +370,8 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .utility-order-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; max-height: 390px; padding: 2px; overflow: auto; }
 .utility-order-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 9px; padding: 10px 11px; border: 1px solid #e2e7ef; border-radius: 10px; background: #fbfcfe; cursor: pointer; }
 .utility-order-row:has(input:checked) { border-color: #77cdb7; background: #eefaf6; }
+.utility-order-row.ineligible { cursor: not-allowed; background: #f6f7f9; opacity: .72; }
+.utility-order-row.ineligible b { color: #9b5660; }
 .utility-order-row span, .utility-order-row strong, .utility-order-row small { display: block; min-width: 0; }
 .utility-order-row strong { overflow: hidden; color: #334157; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .utility-order-row small { margin-top: 3px; overflow: hidden; color: #8490a3; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
