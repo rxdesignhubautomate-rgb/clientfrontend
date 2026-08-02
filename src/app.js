@@ -1894,6 +1894,11 @@ function segmentOptions() {
 }
 
 const ORDER_STATUSES = ["CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION", "READY_TO_DISPATCH", "DISPATCHED", "DELIVERED", "ON_HOLD", "CANCELLED"];
+const UTILITY_BATCH_ACTIVE_STATUSES = [...new Set([
+  ...ORDER_STATUSES.filter((status) => !["CANCELLED", "DELIVERED", "DISPATCHED"].includes(status)),
+  "ORDER_RECEIVED", "IN_PROGRESS", "DESIGNING", "APPROVAL", "APPROVED", "PRINT_BIND", "PRODUCTION",
+  "READY_TO_SHIP", "READY_FOR_DISPATCH", "PAYMENT_PENDING", "PENDING", "PROCESSING", "WORK_STARTED"
+])];
 
 async function renderMarketing() {
   pageTitle.textContent = "Marketing";
@@ -2017,8 +2022,7 @@ async function optionalMarketingApi(path) {
 }
 
 async function loadEligibleUtilityOrders() {
-  const activeStatuses = ORDER_STATUSES.filter((status) => !["CANCELLED", "DELIVERED", "DISPATCHED"].includes(status));
-  const responses = await Promise.all(activeStatuses.map((status) => (
+  const responses = await Promise.all(UTILITY_BATCH_ACTIVE_STATUSES.map((status) => (
     optionalMarketingApi(`/orders?status=${encodeURIComponent(status)}&limit=100&sortBy=updatedAt&sortOrder=desc`)
   )));
   const unique = new Map();
@@ -2102,7 +2106,7 @@ function renderVerifiedOrderBatch(templateApproved) {
   const orders = eligibleUtilityBatchOrders();
   const result = state.marketing.utilityBatchResult;
   return `<section class="panel utility-batch-panel">
-    <div class="panel-title-row"><div><p class="eyebrow">VERIFIED ORDER BATCH</p><h3>Send order-confirmation video in batches</h3><p>Select up to 50 real, active CRM orders. Every order and existing-client relationship is verified separately before queueing.</p></div><span class="count-pill">${orders.length} recent eligible</span></div>
+    <div class="panel-title-row"><div><p class="eyebrow">VERIFIED ORDER BATCH</p><h3>Send order-confirmation video in batches</h3><p>Select up to 50 companies with real, active CRM orders. Both imported and Process App order statuses are supported.</p></div><span class="count-pill">${orders.length} eligible companies</span></div>
     ${templateApproved ? "" : '<div class="form-error policy-error">Sync Meta first. The approved Video-header template <strong>rx_order_confirmation</strong> is required.</div>'}
     ${state.marketing.orderLoadError ? `<div class="form-error policy-error">Orders could not load: ${esc(state.marketing.orderLoadError)}</div>` : ""}
     <form id="verified-order-batch-form" class="policy-form">
@@ -2118,7 +2122,12 @@ function renderVerifiedOrderBatch(templateApproved) {
 
 function eligibleUtilityBatchOrders() {
   const terminal = new Set(["CANCELLED", "COMPLETED", "DELIVERED", "DISPATCHED"]);
-  return (state.marketing.orders || []).filter((order) => order.contactId && !terminal.has(String(order.status || "").toUpperCase()));
+  const newestOrderByCompany = new Map();
+  for (const order of state.marketing.orders || []) {
+    if (!order.contactId || terminal.has(String(order.status || "").toUpperCase())) continue;
+    if (!newestOrderByCompany.has(order.contactId)) newestOrderByCompany.set(order.contactId, order);
+  }
+  return [...newestOrderByCompany.values()];
 }
 
 function utilityBatchOrderRow(order) {
