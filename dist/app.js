@@ -134,7 +134,8 @@ async function api(path, options = {}) {
 async function uploadAttachment(file, contactId, conversationId) {
   if (!state.session) throw new Error("Authentication required");
   if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
-  const query = new URLSearchParams({ contactId, conversationId });
+  const query = new URLSearchParams({ contactId });
+  if (conversationId) query.set("conversationId", conversationId);
   const response = await fetch(`${config.apiBaseUrl}/attachments?${query}`, {
     method: "POST",
     headers: {
@@ -492,9 +493,11 @@ function whatsappChatMarkup(conversation, draftText) {
 function waComposer(windowStatus, draftText) {
   const wa = state.whatsapp;
   const template = selectedUtilityTemplate();
+  const templateHeader = template?.header || null;
+  const visibleTemplates = utilityTemplatesForSelectedContact();
   const useText = wa.mode === "TEXT" && windowStatus.open;
   const quoted = wa.messages.find((item) => item.messageId === wa.replyToMessageId);
-  const approvedTemplateAvailable = wa.templates.some((item) => item.approved !== false);
+  const approvedTemplateAvailable = visibleTemplates.length > 0;
   return `<div class="wa-composer">
     <div class="wa-compose-tabs">
       <button class="${useText ? "active" : ""}" data-wa-mode="TEXT" ${windowStatus.open ? "" : "disabled"}>Reply</button>
@@ -515,10 +518,11 @@ function waComposer(windowStatus, draftText) {
         <div class="wa-input-row"><textarea id="wa-message-input" rows="1" maxlength="4096" placeholder="Type a message or / shortcut…">${esc(draftText)}</textarea><button class="wa-send-button" type="submit">Send</button></div>
       </form>` : `
       <form id="wa-composer-form" class="wa-template-composer">
-        <div class="wa-template-row"><label>Approved Utility template<select id="wa-template-select" ${approvedTemplateAvailable ? "" : "disabled"}>${wa.templates.map((item) => `<option value="${attr(item.id)}" ${item.id === template?.id ? "selected" : ""} ${item.approved === false ? "disabled" : ""}>${esc(item.label)} · ${esc(pretty(item.approvalStatus || "Approved"))}</option>`).join("")}</select></label>
+        <div class="wa-template-row"><label>Approved Utility template<select id="wa-template-select" ${approvedTemplateAvailable ? "" : "disabled"}>${visibleTemplates.map((item) => `<option value="${attr(item.id)}" ${item.id === template?.id ? "selected" : ""}>${esc(item.label)} · ${esc(pretty(item.approvalStatus || "Approved"))}</option>`).join("")}</select></label>
           <label>Related order<select id="wa-template-order"><option value="">Select order</option>${(wa.overview?.orders || []).map((order) => `<option value="${attr(order.orderId)}" ${order.orderId === wa.selectedOrderId ? "selected" : ""}>${esc(orderReference(order))} · ${esc(pretty(order.status))}</option>`).join("")}</select></label></div>
         ${approvedTemplateAvailable
           ? `<div class="wa-template-fields">${(template?.variables || []).map((field) => `<label>${esc(field.label)}<input data-template-field="${attr(field.key)}" value="${attr(wa.templateValues[field.key] || "")}" required /></label>`).join("")}</div>
+            ${templateHeader?.type ? `<label class="wa-template-media">${esc(pretty(templateHeader.type))} header ${templateHeader.required ? "(required)" : "(optional)"}<input id="wa-template-header-file" type="file" accept="${attr(templateHeaderAccept(templateHeader.type))}" ${templateHeader.required ? "required" : ""} /><small id="wa-template-header-name">${wa.utilityHeaderFile ? esc(wa.utilityHeaderFile.name) : `Upload the order-specific ${String(templateHeader.type).toLowerCase()} approved for this template.`}</small></label>` : ""}
             <div class="wa-template-preview"><span>UTILITY PREVIEW</span><p>${esc(renderUtilityPreview(template, wa.templateValues))}</p></div>`
           : '<div class="wa-template-warning">No approved Utility template is synced. Sync Meta templates, then try again.</div>'}
         <div class="wa-template-actions"><button class="wa-sync-templates" id="wa-sync-templates" type="button">Sync Meta templates</button><button class="wa-send-template" type="submit" ${approvedTemplateAvailable ? "" : "disabled"}>Send Utility update</button></div>
@@ -679,6 +683,7 @@ function bindWhatsappEvents() {
   document.querySelector("#wa-template-select")?.addEventListener("change", (event) => {
     state.whatsapp.templateId = event.target.value;
     state.whatsapp.templateValues = {};
+    state.whatsapp.utilityHeaderFile = null;
     prefillUtilityValues(true);
     renderWhatsappPage();
   });
@@ -686,6 +691,7 @@ function bindWhatsappEvents() {
   document.querySelector("#wa-template-order")?.addEventListener("change", (event) => {
     state.whatsapp.selectedOrderId = event.target.value || null;
     state.whatsapp.templateValues = {};
+    state.whatsapp.utilityHeaderFile = null;
     prefillUtilityValues(true);
     renderWhatsappPage();
   });
@@ -694,6 +700,12 @@ function bindWhatsappEvents() {
     const preview = document.querySelector(".wa-template-preview p");
     if (preview) preview.textContent = renderUtilityPreview(selectedUtilityTemplate(), state.whatsapp.templateValues);
   }));
+  document.querySelector("#wa-template-header-file")?.addEventListener("change", (event) => {
+    const file = event.target.files?.[0] || null;
+    state.whatsapp.utilityHeaderFile = file;
+    const label = document.querySelector("#wa-template-header-name");
+    if (label) label.textContent = file?.name || "No file selected";
+  });
   document.querySelector("#wa-composer-form")?.addEventListener("submit", sendWhatsappMessage);
   document.querySelector("#wa-toggle-status")?.addEventListener("click", toggleConversationStatus);
   document.querySelector("#wa-toggle-client-panel")?.addEventListener("click", () => {
@@ -736,6 +748,7 @@ function bindWhatsappEvents() {
     state.whatsapp.templateId = button.dataset.prepareTemplate;
     state.whatsapp.selectedOrderId = button.dataset.orderId;
     state.whatsapp.templateValues = {};
+    state.whatsapp.utilityHeaderFile = null;
     prefillUtilityValues(true);
     renderWhatsappPage();
   }));
@@ -925,10 +938,24 @@ async function sendWhatsappMessage(event) {
       if (!text) return;
       body = { type: "TEXT", text, replyToMessageId: wa.replyToMessageId || null };
     } else {
-      if (!selectedUtilityTemplate()) throw new Error("Sync and select an approved Utility template first.");
+      const template = selectedUtilityTemplate();
+      if (!template) throw new Error("Sync and select an approved Utility template first.");
       if (!wa.selectedOrderId) throw new Error("Select the related CRM order before sending this Utility update.");
       document.querySelectorAll("[data-template-field]").forEach((input) => { wa.templateValues[input.dataset.templateField] = input.value.trim(); });
-      body = { type: "TEMPLATE", utilityTemplateId: selectedUtilityTemplate()?.id, templateVariables: wa.templateValues };
+      const headerFile = wa.utilityHeaderFile;
+      if (template.header?.required && !headerFile) throw new Error(`Upload the required ${String(template.header.type || "media").toLowerCase()} for this approved template.`);
+      if (!template.header && headerFile) throw new Error("The selected Utility template does not accept header media.");
+      if (headerFile && !fileMatchesTemplateHeader(headerFile, template.header?.type)) {
+        throw new Error(`Select a valid ${String(template.header?.type || "media").toLowerCase()} file.`);
+      }
+      let attachmentIds = [];
+      if (headerFile) {
+        button.textContent = "Uploading video...";
+        const attachment = await uploadAttachment(headerFile, wa.overview.contact.contactId, wa.selectedId);
+        attachmentIds = [attachment.attachmentId || attachment.id];
+        button.textContent = "Queueing update...";
+      }
+      body = { type: "TEMPLATE", utilityTemplateId: template.id, templateVariables: wa.templateValues, attachmentIds };
     }
     const { data: sendResult } = await api(`/conversations/${encodeURIComponent(wa.selectedId)}/messages`, {
       method: "POST",
@@ -941,13 +968,17 @@ async function sendWhatsappMessage(event) {
       throw new Error(policyFailureMessage(sendResult?.reason));
     }
     wa.replyToMessageId = null;
+    wa.utilityHeaderFile = null;
     await loadWhatsappConversation(wa.selectedId, { incremental: true });
     renderWhatsappPage();
     notify(body.type === "TEMPLATE" ? "Utility update queued for WhatsApp." : "Message queued for WhatsApp.");
   } catch (error) {
     notify(error.message, true);
   } finally {
-    if (document.body.contains(button)) button.disabled = false;
+    if (document.body.contains(button)) {
+      button.disabled = false;
+      if (button.classList.contains("wa-send-template")) button.textContent = "Send Utility update";
+    }
   }
 }
 
@@ -1680,7 +1711,7 @@ function showInboundNotification(conversation) {
 
 function prefillUtilityValues(force) {
   const wa = state.whatsapp;
-  const available = wa.templates.filter((item) => item.approved !== false);
+  const available = utilityTemplatesForSelectedContact();
   if (!wa.templateId || !available.some((item) => item.id === wa.templateId)) wa.templateId = available[0]?.id || null;
   const template = selectedUtilityTemplate();
   if (!template) return;
@@ -1711,8 +1742,16 @@ function whatsappWindow() {
 
 function selectedConversation() { return state.whatsapp.conversations.find((item) => conversationId(item) === state.whatsapp.selectedId) || null; }
 function selectedUtilityTemplate() {
-  const available = state.whatsapp.templates.filter((item) => item.approved !== false);
+  const available = utilityTemplatesForSelectedContact();
   return available.find((item) => item.id === state.whatsapp.templateId) || available[0] || null;
+}
+function utilityTemplatesForSelectedContact() {
+  const wa = state.whatsapp;
+  const contact = wa.overview?.contact || selectedConversation()?.contact || {};
+  return wa.templates.filter((item) => (
+    item.approved !== false
+    && (item.id !== "order_confirmation_video" || contact.relationshipType === "EXISTING_CLIENT")
+  ));
 }
 function conversationId(item) { return item?.conversationId || item?.id || null; }
 function waFilterButton(value, label) { return `<button data-wa-filter="${value}" class="${state.whatsapp.filter === value ? "active" : ""}">${label}</button>`; }
@@ -1720,6 +1759,16 @@ function orderReference(order) { return order.orderNumber || `ORD-${String(order
 function suggestedTemplate(status) { return ({ CONFIRMED: "order_confirmation", DESIGN_READY: "design_ready", DISPATCHED: "dispatch_update", DELIVERED: "order_delivered" })[status] || null; }
 function orderStatusOptions(current) { return current && !ORDER_STATUSES.includes(current) ? [current, ...ORDER_STATUSES] : ORDER_STATUSES; }
 function renderUtilityPreview(template, values) { return template ? template.variables.reduce((text, field, index) => text.replaceAll(`{{${index + 1}}}`, values[field.key] || `{{${index + 1}}}`), template.body) : ""; }
+function templateHeaderAccept(type) {
+  return ({ IMAGE: "image/*", VIDEO: "video/*", DOCUMENT: ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv" })[String(type || "").toUpperCase()] || "";
+}
+function fileMatchesTemplateHeader(file, type) {
+  const expected = String(type || "").toUpperCase();
+  if (expected === "IMAGE") return String(file?.type || "").startsWith("image/");
+  if (expected === "VIDEO") return String(file?.type || "").startsWith("video/");
+  if (expected === "DOCUMENT") return Boolean(file);
+  return false;
+}
 function messageStatusMarkup(status) {
   const normalized = String(status || "QUEUED").toUpperCase();
   const label = ({
@@ -1783,6 +1832,7 @@ function freshWhatsappState() {
     composerModeTouched: false,
     templateId: null,
     templateValues: {},
+    utilityHeaderFile: null,
     selectedOrderId: null,
     replyToMessageId: null,
     recording: false,
@@ -1971,6 +2021,9 @@ function renderWhatsAppPolicyTools() {
   const missing = templateRows.filter((item) => !item.remote).length;
   const decision = state.marketing.decision;
   const customerOptions = marketingCustomerOptions();
+  const existingClientOptions = marketingCustomerOptions({ existingOnly: true });
+  const videoUtilityTemplate = templateRows.find((item) => item.key === "order_confirmation_video");
+  const videoUtilityApproved = videoUtilityTemplate?.remote?.status === "APPROVED";
   return `<section class="panel policy-center-panel">
     <div class="panel-title-row"><div><p class="eyebrow">WHATSAPP POLICY CENTER</p><h3>Meta template readiness</h3><p>Sync before sending. Only templates marked Approved by Meta can be used outside the customer-service window.</p></div>${["OWNER", "ADMIN"].includes(state.session?.role) ? '<button type="button" class="button button-secondary" id="sync-meta-templates">Sync from Meta</button>' : '<span class="count-pill">Admin sync</span>'}</div>
     ${state.marketing.templateLoadError ? `<div class="form-error policy-error">Template status unavailable: ${esc(state.marketing.templateLoadError)}</div>` : ""}
@@ -1991,12 +2044,15 @@ function renderWhatsAppPolicyTools() {
       ${decision ? renderDecisionResult(decision) : '<p class="muted policy-helper">No message is sent by this check.</p>'}
     </section>
     <section class="panel policy-tool-panel">
-      <div><p class="eyebrow">TRANSACTIONAL UPDATE</p><h3>Send an order utility message</h3><p>Use a real quotation or order reference. The backend verifies it before queueing the WhatsApp message.</p></div>
-      <form id="utility-event-form" class="policy-form">
-        <label class="field">Customer<select name="contactId" required>${customerOptions}</select></label>
-        <label class="field">Update type<select name="eventType" id="utility-event-type"><option value="QUOTATION_READY">Quotation ready</option><option value="DESIGN_PROOF_READY">Design proof ready</option><option value="DESIGN_APPROVAL_PENDING">Design approval pending</option><option value="PAYMENT_RECEIVED">Payment received</option><option value="ORDER_DISPATCHED">Order dispatched</option></select></label>
-        <div id="utility-event-fields">${utilityEventFields("QUOTATION_READY")}</div>
-        <button type="submit" class="button button-primary button-full">Verify & queue message</button>
+      <div><p class="eyebrow">ORDER VIDEO UPDATE</p><h3>Send Utility video to one existing client</h3><p>The video must relate to the selected client's real order. Promotions, catalogues, cross-sell and offers are not Utility content.</p></div>
+      ${videoUtilityApproved ? "" : `<div class="form-error policy-error">Create and approve <strong>rx_order_confirmation_video</strong> in this WhatsApp Business Account, then Sync from Meta.</div>`}
+      <form id="video-utility-event-form" class="policy-form">
+        <label class="field">Existing client<select name="contactId" required ${videoUtilityApproved ? "" : "disabled"}>${existingClientOptions}</select></label>
+        <div class="form-grid policy-form-grid"><label class="field">Customer name<input name="customerName" required maxlength="160" placeholder="Name used in the approved template" /></label><label class="field">Order value<input name="orderValue" required maxlength="100" placeholder="e.g. INR 25,000" /></label></div>
+        <label class="field">Real CRM order ID<input name="orderId" required placeholder="Firestore order ID linked to this client" /></label>
+        <label class="field">Order-specific video<input name="orderVideo" type="file" accept="video/*" required ${videoUtilityApproved ? "" : "disabled"} /><small>One video header only. Meta and the backend must recognize it as video.</small></label>
+        <button type="submit" class="button button-primary button-full" ${videoUtilityApproved ? "" : "disabled"}>Verify order & queue video update</button>
+        <p class="muted policy-helper">This sends to one verified existing client only; it is not a bulk campaign tool.</p>
       </form>
     </section>
   </div>`;
@@ -2028,8 +2084,8 @@ function templateStatusCard(template) {
   return `<article class="template-status-card"><div><strong>${esc(template.name)}</strong><small>${esc(template.key)} · ${esc(template.language)} · ${esc(template.category)}</small></div><span class="template-status status-${attr(status.toLowerCase())}">${esc(pretty(status))}</span>${template.remote?.rejectedReason ? `<p>${esc(template.remote.rejectedReason)}</p>` : ""}</article>`;
 }
 
-function marketingCustomerOptions() {
-  const contacts = state.marketing.contacts || [];
+function marketingCustomerOptions({ existingOnly = false } = {}) {
+  const contacts = (state.marketing.contacts || []).filter((contact) => !existingOnly || contact.relationshipType === "EXISTING_CLIENT");
   return `<option value="">Select customer</option>${contacts.map((contact) => `<option value="${attr(contact.contactId)}">${esc(contact.companyName || contact.contactPerson || contact.primaryPhone || contact.contactId)}</option>`).join("")}`;
 }
 
@@ -2041,14 +2097,6 @@ function messageEventOptions() {
 function renderDecisionResult(decision) {
   const mode = decision.mode || "DO_NOT_SEND";
   return `<div class="decision-result ${decision.allowed ? "allowed" : "blocked"}"><div><span>${esc(pretty(mode))}</span><strong>${decision.allowed ? "Allowed" : "Blocked"}</strong></div><p>${esc(decision.reason || "Policy decision completed")}</p><small>Service window: ${decision.serviceWindowOpen ? "Open" : "Closed"} · Transaction: ${decision.transactionVerified ? "Verified" : "Not verified"}</small></div>`;
-}
-
-function utilityEventFields(eventType) {
-  const commonName = '<label class="field">Customer name<input name="customerName" placeholder="Name used in the template" /></label>';
-  if (eventType === "QUOTATION_READY") return `${commonName}<label class="field">Quotation ID<input name="quotationId" required placeholder="Real quotation ID" /></label><div class="form-grid policy-form-grid"><label class="field">Product<input name="product" required /></label><label class="field">Amount<input name="amount" type="number" min="0" step="0.01" required /></label></div><label class="field">Quotation URL<input name="quotationUrl" type="url" required placeholder="https://..." /></label>`;
-  if (["DESIGN_PROOF_READY", "DESIGN_APPROVAL_PENDING"].includes(eventType)) return `${commonName}<label class="field">Order ID<input name="orderId" required placeholder="Real order ID" /></label><label class="field">Proof URL<input name="proofUrl" type="url" required placeholder="https://..." /></label>`;
-  if (eventType === "PAYMENT_RECEIVED") return `${commonName}<div class="form-grid policy-form-grid"><label class="field">Order ID<input name="orderId" required placeholder="Real order ID" /></label><label class="field">Amount received<input name="amount" type="number" min="0" step="0.01" required /></label></div>`;
-  return `${commonName}<label class="field">Order ID<input name="orderId" required placeholder="Real order ID" /></label><div class="form-grid policy-form-grid"><label class="field">Courier name<input name="courierName" required /></label><label class="field">Tracking number<input name="trackingNumber" required /></label></div><label class="field">Tracking URL (optional)<input name="trackingUrl" type="url" placeholder="https://..." /></label>`;
 }
 
 function renderRepliedProspectsSection() {
@@ -2255,10 +2303,7 @@ function bindMarketingEvents() {
   document.querySelectorAll(".campaign-action").forEach((button) => button.addEventListener("click", () => changeCampaignState(button)));
   document.querySelector("#sync-meta-templates")?.addEventListener("click", syncMetaTemplates);
   document.querySelector("#message-decision-form")?.addEventListener("submit", checkMessageDecision);
-  document.querySelector("#utility-event-type")?.addEventListener("change", (event) => {
-    document.querySelector("#utility-event-fields").innerHTML = utilityEventFields(event.target.value);
-  });
-  document.querySelector("#utility-event-form")?.addEventListener("submit", sendUtilityEvent);
+  document.querySelector("#video-utility-event-form")?.addEventListener("submit", sendVideoUtilityEvent);
   bindRepliedProspectEvents();
 }
 
@@ -2524,32 +2569,42 @@ async function checkMessageDecision(event) {
   }
 }
 
-async function sendUtilityEvent(event) {
+async function sendVideoUtilityEvent(event) {
   event.preventDefault();
-  const values = Object.fromEntries(new FormData(event.currentTarget));
-  const type = values.eventType;
-  const endpoint = ({
-    QUOTATION_READY: "quotation-ready",
-    DESIGN_PROOF_READY: "design-proof-ready",
-    DESIGN_APPROVAL_PENDING: "design-approval-pending",
-    PAYMENT_RECEIVED: "payment-received",
-    ORDER_DISPATCHED: "order-dispatched"
-  })[type];
-  if (!endpoint) return notify("Select a supported update type.", true);
-  delete values.eventType;
-  Object.keys(values).forEach((key) => { if (values[key] === "") delete values[key]; });
-  if (!confirm(`Verify the transaction and queue this ${pretty(type)} WhatsApp update?`)) return;
+  const form = event.currentTarget;
+  const values = Object.fromEntries(new FormData(form));
+  const contact = (state.marketing.contacts || []).find((item) => item.contactId === values.contactId);
+  const file = form.elements.orderVideo?.files?.[0] || null;
+  if (!contact || contact.relationshipType !== "EXISTING_CLIENT") return notify("Select an existing client.", true);
+  if (!fileMatchesTemplateHeader(file, "VIDEO")) return notify("Select a valid video file.", true);
+  if (!confirm(`Verify order ${values.orderId} and queue its Utility video update for ${contact.companyName || contact.contactPerson || "this client"}?`)) return;
   const button = event.submitter;
   button.disabled = true;
+  button.textContent = "Uploading order video...";
   try {
-    const { data } = await api(`/events/${endpoint}`, { method: "POST", body: values });
-    notify(data.mode ? `Message ${data.queued ? "queued" : "checked"} using ${pretty(data.mode)}${data.reason ? `: ${pretty(data.reason)}` : ""}.` : "Utility message verified and queued.");
-    event.currentTarget.reset();
-    document.querySelector("#utility-event-fields").innerHTML = utilityEventFields("QUOTATION_READY");
+    const attachment = await uploadAttachment(file, values.contactId, null);
+    button.textContent = "Verifying order...";
+    const { data } = await api("/events/order-confirmed", {
+      method: "POST",
+      headers: { "idempotency-key": `${values.contactId}-${values.orderId}-order-video` },
+      body: {
+        contactId: values.contactId,
+        customerName: values.customerName,
+        orderId: values.orderId,
+        orderValue: values.orderValue,
+        templateKey: "order_confirmation_video",
+        templateAttachmentIds: [attachment.attachmentId || attachment.id],
+        metadata: { source: "MARKETING_POLICY_CENTER", contentPurpose: "ORDER_CONFIRMATION" }
+      }
+    });
+    if (data?.queued !== true) throw new Error(policyFailureMessage(data?.reason));
+    form.reset();
+    notify("Verified order video Utility update queued for WhatsApp.");
   } catch (error) {
     notify(error.message, true);
   } finally {
     button.disabled = false;
+    button.textContent = "Verify order & queue video update";
   }
 }
 

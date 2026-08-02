@@ -281,6 +281,9 @@ img.wa-media, video.wa-media { object-fit: cover; }
 .wa-template-fields { margin-top: 7px; }
 .wa-template-row label, .wa-template-fields label { color: #71808b; font-size: 8px; font-weight: 800; text-transform: uppercase; }
 .wa-template-row select, .wa-template-fields input { display: block; width: 100%; height: 33px; margin-top: 4px; padding: 0 8px; border: 1px solid #dce3e0; border-radius: 8px; outline: none; color: #263740; background: white; font-size: 10px; text-transform: none; }
+.wa-template-media { display: grid; gap: 4px; margin-top: 7px; padding: 8px 10px; border: 1px dashed #27aa88; border-radius: 8px; color: #27846e; background: #f1fbf8; font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.wa-template-media input { width: 100%; color: #263740; font-size: 9px; font-weight: 600; text-transform: none; }
+.wa-template-media small { color: #71808b; font-size: 8px; font-weight: 500; line-height: 1.35; text-transform: none; }
 .wa-template-preview { margin: 8px 0; padding: 8px 10px; border-left: 3px solid #27aa88; border-radius: 7px; background: #ebf8f4; }
 .wa-template-preview span { color: #27846e; font-size: 7px; font-weight: 900; letter-spacing: .08em; }
 .wa-template-preview p { margin: 4px 0 0; color: #40504f; font-size: 9px; line-height: 1.35; }
