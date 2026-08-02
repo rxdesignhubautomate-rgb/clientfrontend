@@ -169,6 +169,24 @@ async function uploadMarketingAsset(file) {
   return payload.data;
 }
 
+async function uploadUtilityTemplateAsset(file) {
+  if (!state.session) throw new Error("Authentication required");
+  if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
+  const response = await fetch(`${config.apiBaseUrl}/attachments?purpose=UTILITY_TEMPLATE_ASSET`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${state.session.accessToken}`,
+      "content-type": file.type || "application/octet-stream",
+      "x-filename": encodeURIComponent(file.name || "order-confirmation-video.mp4")
+    },
+    body: file
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) logout();
+  if (!response.ok) throw new Error(payload.error?.message || payload.message || `Utility video upload failed (${response.status})`);
+  return payload.data;
+}
+
 async function fetchAttachmentBlob(attachmentId, { download = false } = {}) {
   if (!state.session) throw new Error("Authentication required");
   if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
@@ -1750,7 +1768,7 @@ function utilityTemplatesForSelectedContact() {
   const contact = wa.overview?.contact || selectedConversation()?.contact || {};
   return wa.templates.filter((item) => (
     item.approved !== false
-    && (item.id !== "order_confirmation_video" || contact.relationshipType === "EXISTING_CLIENT")
+    && (item.id !== "order_confirmation" || contact.relationshipType === "EXISTING_CLIENT")
   ));
 }
 function conversationId(item) { return item?.conversationId || item?.id || null; }
@@ -1848,9 +1866,9 @@ function freshWhatsappState() {
 }
 function freshMarketingState() {
   return {
-    contacts: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
+    contacts: [], orders: [], audiences: [], campaigns: [], templates: [], replied: [], users: [],
     metaTemplates: [], configuredTemplates: [], templateLoadError: null, replyLoadError: null, userLoadError: null,
-    strictCampaignLifecycle: false, replyFilter: "ALL", decision: null
+    strictCampaignLifecycle: false, replyFilter: "ALL", decision: null, utilityBatchResult: null
   };
 }
 
@@ -1879,7 +1897,7 @@ const ORDER_STATUSES = ["CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION
 
 async function renderMarketing() {
   pageTitle.textContent = "Marketing";
-  const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse, repliedResponse, usersResponse, metaTemplatesResponse, configuredTemplatesResponse] = await Promise.all([
+  const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse, repliedResponse, usersResponse, metaTemplatesResponse, configuredTemplatesResponse, ordersResponse] = await Promise.all([
     marketingApi("/contacts?limit=100", "Customers"),
     marketingApi("/marketing/audiences?limit=100", "Interested lists"),
     firstAvailableMarketingApi(["/campaigns?limit=100", "/marketing/campaigns?limit=100"], "Campaigns"),
@@ -1887,10 +1905,12 @@ async function renderMarketing() {
     optionalMarketingApi("/marketing/replied?limit=100"),
     optionalMarketingApi("/users?limit=100"),
     optionalMarketingApi("/whatsapp/templates?limit=100"),
-    optionalMarketingApi("/whatsapp/templates/configured")
+    optionalMarketingApi("/whatsapp/templates/configured"),
+    loadEligibleUtilityOrders()
   ]);
   state.marketing = {
     contacts: contactsResponse.data || [],
+    orders: ordersResponse.data || [],
     audiences: audiencesResponse.data || [],
     campaigns: campaignsResponse.data || [],
     templates: templatesResponse.data || [],
@@ -1901,9 +1921,11 @@ async function renderMarketing() {
     templateLoadError: metaTemplatesResponse.error || configuredTemplatesResponse.error || null,
     replyLoadError: repliedResponse.error || null,
     userLoadError: usersResponse.error || null,
+    orderLoadError: ordersResponse.error || null,
     strictCampaignLifecycle: campaignsResponse.route?.startsWith("/campaigns") === true,
     decision: state.marketing.decision || null,
-    replyFilter: state.marketing.replyFilter || "ALL"
+    replyFilter: state.marketing.replyFilter || "ALL",
+    utilityBatchResult: state.marketing.utilityBatchResult || null
   };
   const stats = aggregateCampaignStats(state.marketing.campaigns);
   const template = state.marketing.templates.find((item) => item.id === "interest_followup")
@@ -1994,6 +2016,22 @@ async function optionalMarketingApi(path) {
   }
 }
 
+async function loadEligibleUtilityOrders() {
+  const activeStatuses = ORDER_STATUSES.filter((status) => !["CANCELLED", "DELIVERED", "DISPATCHED"].includes(status));
+  const responses = await Promise.all(activeStatuses.map((status) => (
+    optionalMarketingApi(`/orders?status=${encodeURIComponent(status)}&limit=100&sortBy=updatedAt&sortOrder=desc`)
+  )));
+  const unique = new Map();
+  for (const response of responses) {
+    for (const order of response.data || []) unique.set(order.orderId, order);
+  }
+  const data = [...unique.values()]
+    .sort((left, right) => new Date(right.updatedAt || right.createdAt || 0) - new Date(left.updatedAt || left.createdAt || 0))
+    .slice(0, 100);
+  const failures = responses.map((response) => response.error).filter(Boolean);
+  return { data, error: failures.length === responses.length ? failures[0] : null };
+}
+
 async function firstAvailableMarketingApi(paths, label) {
   let lastError = null;
   for (const path of paths) {
@@ -2022,7 +2060,7 @@ function renderWhatsAppPolicyTools() {
   const decision = state.marketing.decision;
   const customerOptions = marketingCustomerOptions();
   const existingClientOptions = marketingCustomerOptions({ existingOnly: true });
-  const videoUtilityTemplate = templateRows.find((item) => item.key === "order_confirmation_video");
+  const videoUtilityTemplate = templateRows.find((item) => item.key === "order_confirmation");
   const videoUtilityApproved = videoUtilityTemplate?.remote?.status === "APPROVED";
   return `<section class="panel policy-center-panel">
     <div class="panel-title-row"><div><p class="eyebrow">WHATSAPP POLICY CENTER</p><h3>Meta template readiness</h3><p>Sync before sending. Only templates marked Approved by Meta can be used outside the customer-service window.</p></div>${["OWNER", "ADMIN"].includes(state.session?.role) ? '<button type="button" class="button button-secondary" id="sync-meta-templates">Sync from Meta</button>' : '<span class="count-pill">Admin sync</span>'}</div>
@@ -2045,7 +2083,7 @@ function renderWhatsAppPolicyTools() {
     </section>
     <section class="panel policy-tool-panel">
       <div><p class="eyebrow">ORDER VIDEO UPDATE</p><h3>Send Utility video to one existing client</h3><p>The video must relate to the selected client's real order. Promotions, catalogues, cross-sell and offers are not Utility content.</p></div>
-      ${videoUtilityApproved ? "" : `<div class="form-error policy-error">Create and approve <strong>rx_order_confirmation_video</strong> in this WhatsApp Business Account, then Sync from Meta.</div>`}
+      ${videoUtilityApproved ? "" : `<div class="form-error policy-error">Approve the Video-header version of <strong>rx_order_confirmation</strong> in this WhatsApp Business Account, then Sync from Meta.</div>`}
       <form id="video-utility-event-form" class="policy-form">
         <label class="field">Existing client<select name="contactId" required ${videoUtilityApproved ? "" : "disabled"}>${existingClientOptions}</select></label>
         <div class="form-grid policy-form-grid"><label class="field">Customer name<input name="customerName" required maxlength="160" placeholder="Name used in the approved template" /></label><label class="field">Order value<input name="orderValue" required maxlength="100" placeholder="e.g. INR 25,000" /></label></div>
@@ -2055,7 +2093,44 @@ function renderWhatsAppPolicyTools() {
         <p class="muted policy-helper">This sends to one verified existing client only; it is not a bulk campaign tool.</p>
       </form>
     </section>
-  </div>`;
+  </div>
+  ${renderVerifiedOrderBatch(videoUtilityApproved)}`;
+}
+
+function renderVerifiedOrderBatch(templateApproved) {
+  if (!["OWNER", "ADMIN"].includes(state.session?.role)) return "";
+  const orders = eligibleUtilityBatchOrders();
+  const result = state.marketing.utilityBatchResult;
+  return `<section class="panel utility-batch-panel">
+    <div class="panel-title-row"><div><p class="eyebrow">VERIFIED ORDER BATCH</p><h3>Send order-confirmation video in batches</h3><p>Select up to 50 real, active CRM orders. Every order and existing-client relationship is verified separately before queueing.</p></div><span class="count-pill">${orders.length} recent eligible</span></div>
+    ${templateApproved ? "" : '<div class="form-error policy-error">Sync Meta first. The approved Video-header template <strong>rx_order_confirmation</strong> is required.</div>'}
+    ${state.marketing.orderLoadError ? `<div class="form-error policy-error">Orders could not load: ${esc(state.marketing.orderLoadError)}</div>` : ""}
+    <form id="verified-order-batch-form" class="policy-form">
+      <label class="field utility-batch-video">Video used by the approved Utility template<input name="batchOrderVideo" type="file" accept="video/*" required ${templateApproved ? "" : "disabled"} /><small>This must be an order-confirmation video, not an offer, catalogue, cross-sell or promotion.</small></label>
+      <div class="utility-batch-toolbar"><label><input id="select-all-utility-orders" type="checkbox" ${templateApproved && orders.length ? "" : "disabled"} /> Select first 50 eligible orders</label><strong id="utility-order-selection-count">0 selected</strong></div>
+      <div class="utility-order-list">${orders.length ? orders.map(utilityBatchOrderRow).join("") : '<div class="empty-state">No recent active orders with a linked client were found.</div>'}</div>
+      <label class="campaign-confirm"><input name="confirmTransactionalUse" type="checkbox" required /> I confirm this video is a genuine update for the selected orders and contains no promotional content.</label>
+      <button type="submit" class="button button-primary button-full" ${templateApproved && orders.length ? "" : "disabled"}>Verify & queue selected orders</button>
+    </form>
+    ${result ? renderUtilityBatchResult(result) : '<p class="muted policy-helper">No message is sent until you select orders and confirm this form.</p>'}
+  </section>`;
+}
+
+function eligibleUtilityBatchOrders() {
+  const terminal = new Set(["CANCELLED", "COMPLETED", "DELIVERED", "DISPATCHED"]);
+  return (state.marketing.orders || []).filter((order) => order.contactId && !terminal.has(String(order.status || "").toUpperCase()));
+}
+
+function utilityBatchOrderRow(order) {
+  const contact = (state.marketing.contacts || []).find((item) => item.contactId === order.contactId);
+  const customer = contact?.companyName || contact?.contactPerson || order.companyName || order.contactName || order.contactId;
+  const reference = order.orderNumber || order.externalOrderId || order.orderId;
+  return `<label class="utility-order-row"><input type="checkbox" data-utility-order-id="${attr(order.orderId)}" /><span><strong>${esc(reference)}</strong><small>${esc(customer)} · ${esc(pretty(order.status || "ACTIVE"))}</small></span><b>${esc(money(order.totalAmount || order.orderAmount || 0))}</b></label>`;
+}
+
+function renderUtilityBatchResult(result) {
+  const problems = (result.results || []).filter((item) => item.status !== "QUEUED");
+  return `<div class="utility-batch-result"><div><span><strong>${esc(result.queued || 0)}</strong> queued</span><span><strong>${esc(result.skipped || 0)}</strong> skipped</span><span><strong>${esc(result.failed || 0)}</strong> failed</span></div>${problems.length ? `<details><summary>View skipped / failed (${problems.length})</summary>${problems.map((item) => `<p><b>${esc(item.orderId)}</b> · ${esc(pretty(item.reason || item.status))}</p>`).join("")}</details>` : ""}</div>`;
 }
 
 function findRemoteTemplate(remoteTemplates, configuredTemplate) {
@@ -2304,6 +2379,22 @@ function bindMarketingEvents() {
   document.querySelector("#sync-meta-templates")?.addEventListener("click", syncMetaTemplates);
   document.querySelector("#message-decision-form")?.addEventListener("submit", checkMessageDecision);
   document.querySelector("#video-utility-event-form")?.addEventListener("submit", sendVideoUtilityEvent);
+  const updateUtilityOrderCount = () => {
+    const selected = [...document.querySelectorAll("[data-utility-order-id]:checked")];
+    if (selected.length > 50) {
+      selected.at(-1).checked = false;
+      notify("A verified Utility batch can contain at most 50 orders.", true);
+    }
+    const count = document.querySelectorAll("[data-utility-order-id]:checked").length;
+    const label = document.querySelector("#utility-order-selection-count");
+    if (label) label.textContent = `${count} selected`;
+  };
+  document.querySelectorAll("[data-utility-order-id]").forEach((checkbox) => checkbox.addEventListener("change", updateUtilityOrderCount));
+  document.querySelector("#select-all-utility-orders")?.addEventListener("change", (event) => {
+    document.querySelectorAll("[data-utility-order-id]").forEach((checkbox, index) => { checkbox.checked = event.target.checked && index < 50; });
+    updateUtilityOrderCount();
+  });
+  document.querySelector("#verified-order-batch-form")?.addEventListener("submit", sendVerifiedOrderBatch);
   bindRepliedProspectEvents();
 }
 
@@ -2592,7 +2683,7 @@ async function sendVideoUtilityEvent(event) {
         customerName: values.customerName,
         orderId: values.orderId,
         orderValue: values.orderValue,
-        templateKey: "order_confirmation_video",
+        templateKey: "order_confirmation",
         templateAttachmentIds: [attachment.attachmentId || attachment.id],
         metadata: { source: "MARKETING_POLICY_CENTER", contentPurpose: "ORDER_CONFIRMATION" }
       }
@@ -2605,6 +2696,40 @@ async function sendVideoUtilityEvent(event) {
   } finally {
     button.disabled = false;
     button.textContent = "Verify order & queue video update";
+  }
+}
+
+async function sendVerifiedOrderBatch(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const orderIds = [...document.querySelectorAll("[data-utility-order-id]:checked")].map((item) => item.dataset.utilityOrderId);
+  const file = form.elements.batchOrderVideo?.files?.[0] || null;
+  if (!orderIds.length) return notify("Select at least one real CRM order.", true);
+  if (orderIds.length > 50) return notify("Select no more than 50 orders per batch.", true);
+  if (!fileMatchesTemplateHeader(file, "VIDEO")) return notify("Select a valid video file for the approved template header.", true);
+  if (!confirm(`Verify and queue ${orderIds.length} order-confirmation Utility message(s)? Ineligible and duplicate orders will be skipped.`)) return;
+  const button = event.submitter;
+  button.disabled = true;
+  button.textContent = "Uploading Utility video...";
+  try {
+    const attachment = await uploadUtilityTemplateAsset(file);
+    button.textContent = "Verifying selected orders...";
+    const { data } = await api("/events/order-confirmed/batch", {
+      method: "POST",
+      body: {
+        orderIds,
+        templateKey: "order_confirmation",
+        templateAttachmentId: attachment.attachmentId || attachment.id,
+        confirmTransactionalUse: true
+      }
+    });
+    state.marketing.utilityBatchResult = data;
+    notify(`${data.queued} verified order update(s) queued; ${data.skipped} skipped; ${data.failed} failed.`, Boolean(data.failed));
+    await renderMarketing();
+  } catch (error) {
+    notify(error.message, true);
+    button.disabled = false;
+    button.textContent = "Verify & queue selected orders";
   }
 }
 
