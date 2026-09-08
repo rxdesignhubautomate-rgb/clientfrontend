@@ -1,4 +1,5 @@
 import { createChatCache } from "./chat-cache.js";
+import { uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners } from "./inbox-style.js";
 
 const config = window.__CRM_CONFIG__ || {};
 const authKey = "rx-crm-session-v1";
@@ -290,6 +291,7 @@ async function renderDashboard() {
 async function renderWhatsapp(requestedConversationId) {
   pageTitle.textContent = "WhatsApp Inbox";
   const wa = state.whatsapp;
+  wa.mobileChatOpen = Boolean(requestedConversationId);
   wa.cache ||= createChatCache(state.session?.email);
   await hydrateWhatsappCache(requestedConversationId);
   if (wa.conversations.length) renderWhatsappPage();
@@ -454,22 +456,25 @@ function renderWhatsappPage(draftText = "") {
   const viewport = captureWhatsappViewport();
   releaseMediaObjectUrls();
   page.innerHTML = `
-    <div class="wa-page-head">
-      <div><h1>WhatsApp Inbox</h1><p>Real-time client chat, media, team ownership and orders in one place.</p></div>
-      <div class="wa-page-actions">
-        <span id="wa-sync-state" class="wa-api-state ${syncIndicator.connected ? "connected" : "disconnected"}">${esc(syncIndicator.label)}</span>
-        <button class="button button-secondary" id="wa-enable-alerts" type="button">Enable alerts</button>
-        <a class="button button-primary" href="#clients">+ Start client chat</a>
-      </div>
-    </div>
-    <div class="wa-shell">
-      <aside class="wa-inbox-panel">
-        <div class="wa-inbox-tools"><input id="wa-search" class="wa-search" placeholder="Search chats..." value="${attr(wa.search)}" />
-          <div class="wa-filters">${waFilterButton("ALL", "All")}${waFilterButton("UNREAD", "Unread")}${waFilterButton("OPEN", "Open")}</div>
+    <div class="wa-shell ${selected && wa.mobileChatOpen ? "mobile-chat-open" : ""} ${selected && wa.clientPanelOpen ? "client-panel-open" : ""}">
+      <aside class="wa-inbox-panel" aria-label="Conversations">
+        <div class="wa-inbox-tools">
+          <header class="wa-inbox-heading">
+            <div><h1>Chats</h1><span id="wa-sync-state" class="wa-api-state ${syncIndicator.connected ? "connected" : "disconnected"}">${esc(syncIndicator.label)}</span></div>
+            <div class="wa-header-actions">
+              <button class="wa-icon-button wa-mobile-menu" id="wa-menu-button" type="button" title="Open navigation" aria-label="Open navigation">${uiIcon("menu")}</button>
+              <button class="wa-icon-button" id="wa-enable-alerts" type="button" title="Enable desktop alerts" aria-label="Enable desktop alerts">${uiIcon("bell")}</button>
+              <a class="wa-icon-button" href="#clients" title="Start client chat" aria-label="Start client chat">${uiIcon("plus")}</a>
+            </div>
+          </header>
+          <label class="wa-search-wrap">${uiIcon("search")}<span class="sr-only">Search conversations</span><input id="wa-search" class="wa-search" type="search" placeholder="Search or start a new chat" value="${attr(wa.search)}" /></label>
+          <div class="wa-filters" aria-label="Filter conversations">${waFilterButton("ALL", "All")}${waFilterButton("UNREAD", "Unread")}${waFilterButton("OPEN", "Open")}${waFilterButton("IMPORTANT", "Important")}</div>
+          ${waQuickFilters()}
+          <div class="wa-inbox-counts" id="wa-inbox-counts" aria-live="polite">${waInboxSummary()}</div>
         </div>
         <div class="wa-conversation-list" id="wa-conversation-list">${waConversationList()}</div>
       </aside>
-      ${selected ? whatsappChatMarkup(selected, draftText) : `<section class="wa-no-chat"><div class="wa-empty-icon">WA</div><h3>No WhatsApp conversation yet</h3><p>Open a client profile and choose <strong>Open WhatsApp</strong>. The first outbound message must be an approved Utility template.</p><a class="button button-primary" href="#clients">Choose a client</a></section>`}
+      ${selected ? whatsappChatMarkup(selected, draftText) : `<section class="wa-no-chat"><div class="wa-empty-icon">${uiIcon("chat")}</div><h3>No WhatsApp conversation yet</h3><p>Open a client profile and choose <strong>Open WhatsApp</strong>. The first outbound message must be an approved Utility template.</p><a class="button button-primary" href="#clients">Choose a client</a></section>`}
     </div>`;
   bindWhatsappEvents();
   if (selected) {
@@ -484,19 +489,19 @@ function renderWhatsappPage(draftText = "") {
 function whatsappChatMarkup(conversation, draftText) {
   const wa = state.whatsapp;
   const contact = wa.overview?.contact || conversation.contact || {};
-  const name = contact.companyName || contact.contactPerson || "WhatsApp client";
+  const name = contact.companyName || contact.contactPerson || contact.primaryPhone || "WhatsApp client";
   const windowStatus = whatsappWindow();
   const important = (contact.tags || []).includes("IMPORTANT");
   return `
     <section class="wa-chat-panel" data-chat-conversation-id="${attr(conversationId(conversation))}">
       <header class="wa-chat-head">
-        <a class="wa-mobile-back" href="#whatsapp" aria-label="Back to conversations">‹</a><div class="wa-chat-person"><span class="wa-avatar">${esc(initials(name))}</span><div><strong>${esc(name)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "")}</small></div></div>
+        <a class="wa-mobile-back" href="#whatsapp" aria-label="Back to conversations">${uiIcon("back")}</a><div class="wa-chat-person"><span class="wa-avatar" style="${avatarStyle(name)}">${esc(initials(name))}</span><div><strong>${esc(name)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "")}</small></div></div>
         <div class="wa-chat-actions">
           <span class="wa-window ${windowStatus.open ? "open" : "closed"}">${windowStatus.open ? `Free reply · ${esc(windowStatus.remaining)}` : "Utility template required"}</span>
-          ${contact.primaryPhone ? `<a class="wa-icon-button" href="tel:+${attr(contact.primaryPhone)}" title="Call customer">☎</a>` : ""}
-          <button class="wa-icon-button wa-details-button" id="wa-toggle-client-panel" title="Client workspace">ⓘ</button>
-          <button class="wa-icon-button ${important ? "important" : ""}" id="wa-toggle-important" title="${important ? "Remove Important" : "Mark Important"}">${important ? "★" : "☆"}</button>
-          <button class="wa-icon-button" id="wa-toggle-status" title="${conversation.status === "CLOSED" ? "Reopen" : "Close"} conversation">${conversation.status === "CLOSED" ? "↻" : "✓"}</button>
+          ${contact.primaryPhone ? `<a class="wa-icon-button" href="tel:+${attr(contact.primaryPhone)}" title="Call customer" aria-label="Call customer">${uiIcon("phone")}</a>` : ""}
+          <button class="wa-icon-button wa-details-button" id="wa-toggle-client-panel" type="button" title="Client workspace" aria-label="Client workspace" aria-expanded="${wa.clientPanelOpen}" aria-controls="wa-client-workspace">${uiIcon("info")}</button>
+          <button class="wa-icon-button ${important ? "important" : ""}" id="wa-toggle-important" title="${important ? "Remove Important" : "Mark Important"}">${uiIcon("star")}</button>
+          <button class="wa-icon-button" id="wa-toggle-status" title="${conversation.status === "CLOSED" ? "Reopen" : "Close"} conversation">${uiIcon(conversation.status === "CLOSED" ? "refresh" : "check")}</button>
         </div>
       </header>
       <div class="wa-message-list" id="wa-message-list">
@@ -505,7 +510,7 @@ function whatsappChatMarkup(conversation, draftText) {
       </div>
       ${waComposer(windowStatus, draftText)}
     </section>
-    <aside class="wa-order-panel ${wa.clientPanelOpen ? "open" : ""}">${waOrderPanel(contact)}</aside>`;
+    <aside id="wa-client-workspace" aria-label="Client workspace" class="wa-order-panel ${wa.clientPanelOpen ? "open" : ""}">${waOrderPanel(contact)}</aside>`;
 }
 
 function waComposer(windowStatus, draftText) {
@@ -525,15 +530,15 @@ function waComposer(windowStatus, draftText) {
     ${useText ? `<form id="wa-composer-form" class="wa-text-composer">
         <div class="wa-composer-toolbar">
           <select id="wa-quick-reply"><option value="">Quick reply…</option>${wa.quickReplies.map((item) => `<option value="${attr(item.quickReplyId)}">${esc(item.shortcut)} · ${esc(item.title)}</option>`).join("")}<option value="__CREATE__">+ Add custom quick reply</option></select>
-          <label class="wa-tool-button" title="Attach image, video, audio or document">📎<input id="wa-attachment-input" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf" hidden /></label>
-          <button class="wa-tool-button ${wa.recording ? "recording" : ""}" id="wa-record-audio" type="button" title="Record voice note">${wa.recording ? "■ Stop" : "🎙 Voice"}</button>
-          <button class="wa-tool-button" id="wa-share-location" type="button" title="Share current location">⌖</button>
-          <button class="wa-tool-button" id="wa-share-contact" type="button" title="Share a contact card">👤</button>
-          <button class="wa-tool-button" id="wa-interactive-buttons" type="button" title="Send quick-reply buttons">⚡</button>
-          <button class="wa-tool-button" id="wa-add-internal-note" type="button" title="Add an internal note">📝</button>
+          <label class="wa-tool-button" title="Attach image, video, audio or document">${uiIcon("clip")}<span class="sr-only">Attach a file</span><input id="wa-attachment-input" class="sr-only" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf" /></label>
+          <button class="wa-tool-button ${wa.recording ? "recording" : ""}" id="wa-record-audio" type="button" title="Record voice note" aria-label="${wa.recording ? "Stop recording" : "Record voice note"}">${wa.recording ? "■ Stop" : uiIcon("mic")}</button>
+          <button class="wa-tool-button" id="wa-share-location" type="button" title="Share current location" aria-label="Share current location">${uiIcon("pin")}</button>
+          <button class="wa-tool-button" id="wa-share-contact" type="button" title="Share a contact card" aria-label="Share a contact card">${uiIcon("people")}</button>
+          <button class="wa-tool-button" id="wa-interactive-buttons" type="button" title="Send quick-reply buttons" aria-label="Send quick-reply buttons">${uiIcon("bolt")}</button>
+          <button class="wa-tool-button" id="wa-add-internal-note" type="button" title="Add an internal note" aria-label="Add an internal note">${uiIcon("note")}</button>
         </div>
         ${quoted ? `<div class="wa-replying"><div><small>Replying to ${quoted.direction === "INBOUND" ? "customer" : "team"}</small><p>${esc(quoted.text || `[${pretty(quoted.type)}]`)}</p></div><button id="wa-cancel-reply" type="button">×</button></div>` : ""}
-        <div class="wa-input-row"><textarea id="wa-message-input" rows="1" maxlength="4096" placeholder="Type a message or / shortcut…">${esc(draftText)}</textarea><button class="wa-send-button" type="submit">Send</button></div>
+        <div class="wa-input-row"><textarea id="wa-message-input" rows="1" maxlength="4096" placeholder="Type a message or / shortcut…">${esc(draftText)}</textarea><button class="wa-send-button" type="submit" title="Send message" aria-label="Send message">${uiIcon("send")}</button></div>
       </form>` : `
       <form id="wa-composer-form" class="wa-template-composer">
         <div class="wa-template-row"><label>Approved Utility template<select id="wa-template-select" ${approvedTemplateAvailable ? "" : "disabled"}>${visibleTemplates.map((item) => `<option value="${attr(item.id)}" ${item.id === template?.id ? "selected" : ""}>${esc(item.label)} · ${esc(pretty(item.approvalStatus || "Approved"))}</option>`).join("")}</select></label>
@@ -584,21 +589,13 @@ function waOrderCard(order) {
 
 function waConversationList() {
   const wa = state.whatsapp;
-  const needle = wa.search.trim().toLowerCase();
-  const items = wa.conversations.filter((item) => {
-    const contact = item.contact || {};
-    const haystack = [contact.companyName, contact.contactPerson, contact.primaryPhone, item.lastMessagePreview].join(" ").toLowerCase();
-    if (needle && !haystack.includes(needle)) return false;
-    if (wa.filter === "UNREAD") return Number(item.unreadCount || 0) > 0;
-    if (wa.filter === "OPEN") return item.status !== "CLOSED";
-    return true;
-  });
+  const items = wa.conversations.filter((item) => inboxMatches(item, wa));
   if (!items.length) return '<div class="wa-no-results">No matching conversations.</div>';
   return items.map((item) => {
     const contact = item.contact || {};
     const name = contact.companyName || contact.contactPerson || contact.primaryPhone || "WhatsApp client";
     const active = conversationId(item) === wa.selectedId;
-    return `<button class="wa-conversation ${active ? "active" : ""}" data-conversation-id="${attr(conversationId(item))}"><span class="wa-avatar">${esc(initials(name))}</span><span class="wa-conversation-copy"><span><strong>${esc(name)}</strong><time>${esc(shortTime(item.lastMessageAt))}</time></span><small>${esc(item.lastMessagePreview || "No messages yet")}</small></span>${Number(item.unreadCount || 0) ? `<b>${esc(item.unreadCount)}</b>` : ""}</button>`;
+    return `<button class="wa-conversation ${active ? "active" : ""} ${Number(item.unreadCount || 0) > 0 ? "unread" : ""}" data-conversation-id="${attr(conversationId(item))}" aria-label="Open chat with ${attr(name)}" ${active ? 'aria-current="true"' : ""}><span class="wa-avatar" style="${avatarStyle(name)}">${esc(initials(name))}</span><span class="wa-conversation-copy"><span><strong>${esc(name)}</strong><time>${esc(shortTime(item.lastMessageAt))}</time></span><small>${esc(item.lastMessagePreview || "No messages yet")}</small></span>${Number(item.unreadCount || 0) ? `<b>${esc(item.unreadCount)}</b>` : ""}</button>`;
   }).join("");
 }
 
@@ -685,13 +682,21 @@ function waHasStructuredBody(message) {
 function bindWhatsappEvents() {
   document.querySelector("#wa-search")?.addEventListener("input", (event) => {
     state.whatsapp.search = event.target.value;
-    document.querySelector("#wa-conversation-list").innerHTML = waConversationList();
-    bindConversationRows();
+    refreshWhatsappLiveDom();
   });
-  document.querySelectorAll("[data-wa-filter]").forEach((button) => button.addEventListener("click", () => {
-    state.whatsapp.filter = button.dataset.waFilter;
-    renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
-  }));
+  document.querySelector(".wa-inbox-tools")?.addEventListener("click", (event) => {
+    const filterButton = event.target.closest("[data-wa-filter]");
+    const ownerButton = event.target.closest("[data-wa-owner]");
+    if (filterButton) state.whatsapp.filter = filterButton.dataset.waFilter;
+    else if (ownerButton) state.whatsapp.ownerFilter = state.whatsapp.ownerFilter === ownerButton.dataset.waOwner ? "" : ownerButton.dataset.waOwner;
+    else return;
+    refreshWhatsappLiveDom();
+  });
+  document.querySelector("#wa-label-filter")?.addEventListener("change", (event) => {
+    state.whatsapp.tagFilter = event.target.value;
+    refreshWhatsappLiveDom();
+  });
+  document.querySelector("#wa-menu-button")?.addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
   bindConversationRows();
   document.querySelectorAll("[data-wa-mode]").forEach((button) => button.addEventListener("click", () => {
     state.whatsapp.mode = button.dataset.waMode;
@@ -1461,6 +1466,9 @@ async function toggleConversationStatus() {
 
 async function markSelectedConversationRead() {
   const wa = state.whatsapp;
+  // On phones, the list and chat occupy separate screens. Viewing the list
+  // must not mark an automatically selected, hidden conversation as read.
+  if (window.matchMedia("(max-width: 680px)").matches && !wa.mobileChatOpen) return;
   const unread = [...wa.messages].reverse().find((item) => item.direction === "INBOUND" && item.status !== "READ");
   if (!unread) return;
   try {
@@ -1468,6 +1476,7 @@ async function markSelectedConversationRead() {
     wa.messages.filter((item) => item.direction === "INBOUND").forEach((item) => { item.status = "READ"; });
     const conversation = selectedConversation();
     if (conversation) conversation.unreadCount = 0;
+    updateWhatsappFilterCounts();
     const list = document.querySelector("#wa-conversation-list");
     if (list) { list.innerHTML = waConversationList(); bindConversationRows(); }
   } catch { /* The message remains unread and can be retried on the next open. */ }
@@ -1566,6 +1575,7 @@ async function refreshWhatsappMessage(messageId, { cacheOnly = false } = {}) {
 
 function refreshWhatsappLiveDom({ messagesChanged = false } = {}) {
   updateWhatsappSyncBadge();
+  updateWhatsappFilterCounts();
   const list = document.querySelector("#wa-conversation-list");
   if (list) {
     const listViewport = captureScrollAnchor(list, ".wa-conversation", "conversationId");
@@ -1772,7 +1782,42 @@ function utilityTemplatesForSelectedContact() {
   ));
 }
 function conversationId(item) { return item?.conversationId || item?.id || null; }
-function waFilterButton(value, label) { return `<button data-wa-filter="${value}" class="${state.whatsapp.filter === value ? "active" : ""}">${label}</button>`; }
+function waFilterButton(value, label) {
+  const wa = state.whatsapp;
+  const count = inboxCounts(wa.conversations, wa)[value];
+  return `<button type="button" data-wa-filter="${value}" class="${wa.filter === value ? "active" : ""}" aria-pressed="${wa.filter === value}">${label}<span class="wa-filter-count">${formatCount(count)}</span></button>`;
+}
+
+function waQuickFilters() {
+  const wa = state.whatsapp;
+  const tags = [...new Set(wa.conversations.flatMap(item => item.contact?.tags || []))].sort();
+  if (wa.tagFilter && !tags.includes(wa.tagFilter)) tags.push(wa.tagFilter);
+  const owners = inboxOwners(wa.users);
+  return `<div class="wa-compact-filters"><select id="wa-label-filter" class="wa-label-filter" aria-label="Filter by client tag"><option value="">All labels</option>${tags.map(tag => `<option value="${attr(tag)}" ${wa.tagFilter === tag ? "selected" : ""}>${esc(pretty(tag))}</option>`).join("")}</select>
+    ${owners.length ? `<div class="wa-owner-filters" role="group" aria-label="Quick owner filters">${owners.map(owner => `<button class="wa-mini-filter" type="button" data-wa-owner="${attr(owner.id)}" title="${attr(owner.name)}" aria-label="Filter by ${attr(owner.name)}" aria-pressed="${wa.ownerFilter === owner.id}">${esc(owner.initial)}</button>`).join("")}</div>` : ""}</div>`;
+}
+
+function waInboxSummary() {
+  const wa = state.whatsapp;
+  const counts = inboxCounts(wa.conversations, wa);
+  const shown = wa.conversations.filter(item => inboxMatches(item, wa)).length;
+  return `<span>${formatCount(shown)} of ${formatCount(wa.conversations.length)} loaded chats</span><span><strong>${formatCount(counts.messages)}</strong> unread messages</span>`;
+}
+
+function updateWhatsappFilterCounts() {
+  const wa = state.whatsapp;
+  const counts = inboxCounts(wa.conversations, wa);
+  document.querySelectorAll("[data-wa-filter]").forEach(button => {
+    const active = button.dataset.waFilter === wa.filter;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-pressed", String(active));
+    const count = button.querySelector(".wa-filter-count");
+    if (count) count.textContent = formatCount(counts[button.dataset.waFilter]);
+  });
+  document.querySelectorAll("[data-wa-owner]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.waOwner === wa.ownerFilter)));
+  const summary = document.querySelector("#wa-inbox-counts");
+  if (summary) summary.innerHTML = waInboxSummary();
+}
 function orderReference(order) { return order.orderNumber || `ORD-${String(order.orderId || "").slice(-8).toUpperCase()}`; }
 function suggestedTemplate(status) { return ({ CONFIRMED: "order_confirmation", DESIGN_READY: "design_ready", DISPATCHED: "dispatch_update", DELIVERED: "order_delivered" })[status] || null; }
 function orderStatusOptions(current) { return current && !ORDER_STATUSES.includes(current) ? [current, ...ORDER_STATUSES] : ORDER_STATUSES; }
@@ -1840,6 +1885,9 @@ function freshWhatsappState() {
     cache: null,
     cacheHydrated: false,
     clientPanelOpen: false,
+    mobileChatOpen: false,
+    ownerFilter: "",
+    tagFilter: "",
     selectedId: null,
     messagesConversationId: null,
     overview: null,

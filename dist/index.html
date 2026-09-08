@@ -3,12 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#111b34" />
+    <meta name="theme-color" content="#008069" />
     <title>RX Client CRM</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/whatsapp-style.css?v=1" />
   </head>
   <body>
     <div id="toast" class="toast" hidden></div>
@@ -41,20 +39,20 @@
       <aside class="sidebar">
         <a class="brand sidebar-brand" href="#dashboard"><span class="brand-mark">RX</span><span>Client CRM</span></a>
         <nav>
-          <a data-route="dashboard" href="#dashboard"><span class="nav-icon">⌂</span>Overview</a>
-          <a data-route="whatsapp" href="#whatsapp"><span class="nav-icon nav-icon-wa">WA</span>WhatsApp Inbox</a>
-          <a data-route="marketing" href="#marketing"><span class="nav-icon nav-icon-mkt">M</span>Marketing</a>
-          <a data-route="clients" href="#clients"><span class="nav-icon">◫</span>Clients</a>
-          <a data-route="import" data-owner-only href="#import"><span class="nav-icon">⇧</span>Import register</a>
+          <a data-route="dashboard" href="#dashboard" title="Overview" aria-label="Overview"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="nav-label">Overview</span></a>
+          <a data-route="whatsapp" href="#whatsapp" title="WhatsApp Inbox" aria-label="WhatsApp Inbox"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H5l-3 2V11.5A8.5 8.5 0 0 1 10.5 3h2a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 9h10M7 13h7"/></svg></span><span class="nav-label">WhatsApp Inbox</span></a>
+          <a data-route="marketing" href="#marketing" title="Marketing" aria-label="Marketing"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m3 10 14-6v16L3 14Zm14-2h3v8h-3M5 15l2 6h3l-2-5"/></svg></span><span class="nav-label">Marketing</span></a>
+          <a data-route="clients" href="#clients" title="Clients" aria-label="Clients"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v3"/></svg></span><span class="nav-label">Clients</span></a>
+          <a data-route="import" data-owner-only href="#import" title="Import register" aria-label="Import register"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 16V3m-5 5 5-5 5 5M3 15v6h18v-6"/></svg></span><span class="nav-label">Import register</span></a>
         </nav>
         <div class="sidebar-foot">
           <div class="user-chip"><span id="user-avatar">R</span><div><strong id="user-email">CRM User</strong><small>RX Design Hub</small></div></div>
-          <button id="logout-button" class="text-button">Sign out</button>
+          <button id="logout-button" class="text-button" type="button" title="Sign out" aria-label="Sign out"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3H3v18h6M9 12h12m-4-4 4 4-4 4"/></svg><span class="sr-only">Sign out</span></button>
         </div>
       </aside>
       <main class="main">
         <header class="topbar">
-          <button id="menu-button" class="menu-button" aria-label="Menu">☰</button>
+          <button id="menu-button" class="menu-button" type="button" aria-label="Menu"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
           <div><p class="eyebrow">CLIENT OPERATIONS</p><h2 id="page-title">Overview</h2></div>
           <div class="live-pill"><i></i> Live</div>
         </header>
