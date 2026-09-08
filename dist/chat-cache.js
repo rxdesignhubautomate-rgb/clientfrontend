@@ -37,6 +37,20 @@ class IndexedChatCache {
     await this.trimConversations(database);
   }
 
+  async replaceConversations(conversations) {
+    const database = await this.open();
+    if (!database) return;
+    const retained = new Set(conversations.map(item => item.conversationId || item.id));
+    const old = await this.getConversations();
+    const transaction = database.transaction('conversations', 'readwrite');
+    const store = transaction.objectStore('conversations');
+    const complete = transactionDone(transaction);
+    old.filter(item => !retained.has(item.conversationId)).forEach(item => store.delete(item.conversationId));
+    await complete;
+    for (const item of old.filter(item => !retained.has(item.conversationId))) await this.removeConversationData(database, item);
+    await this.putConversations(conversations);
+  }
+
   async getMessages(conversationId) {
     if (!conversationId) return [];
     const database = await this.open();

@@ -39,11 +39,25 @@ export function avatarStyle(name = "") {
 export function inboxMatches(item, { search = "", filter = "ALL", ownerFilter = "", tagFilter = "" } = {}) {
   const contact = item.contact || {};
   const needle = search.trim().toLowerCase();
-  const haystack = [contact.companyName, contact.contactPerson, contact.primaryPhone, item.lastMessagePreview].join(" ").toLowerCase();
+  const haystack = [contact.companyName, contact.contactPerson, contact.primaryPhone, contact.city, item.lastMessagePreview, item.lead?.leadStatus, ...(item.lead?.productRequired || [])].join(" ").toLowerCase();
   if (needle && !haystack.includes(needle)) return false;
   if (ownerFilter && (item.assignedTo || contact.assignedTo || "") !== ownerFilter) return false;
   if (tagFilter && !(contact.tags || []).includes(tagFilter)) return false;
-  if (filter === "UNREAD") return Number(item.unreadCount || 0) > 0;
+  if (filter === "ARCHIVED") return Boolean(item.preferences?.archived);
+  if (item.preferences?.archived) return false;
+  if (filter === "UNREAD") return Number(item.unreadCount || 0) > 0 || item.preferences?.manualUnread === true;
+  if (filter === "READ") return !(Number(item.unreadCount || 0) > 0 || item.preferences?.manualUnread);
+  const remaining = inboxTime(item.lastInboundAt) + 86400000 - Date.now();
+  if (filter === "WINDOW") return remaining > 0;
+  if (filter === "CLOSING") return remaining > 0 && remaining <= 3600000;
+  if (filter === "HOT") return ['HIGH','VERY_HIGH'].includes(item.lead?.interestLevel) || item.lead?.priority === 'HIGH' || (contact.tags || []).includes('HOT');
+  if (filter === "QUOTATION") return item.lead?.leadStatus === 'QUOTATION_SENT';
+  if (filter === "FOLLOWUP") return Boolean(item.nextFollowUpAt || item.lead?.nextFollowupDate || item.lead?.leadStatus?.startsWith('FOLLOW_UP'));
+  if (filter === "DUE") {
+    const due = inboxTime(item.nextFollowUpAt || item.lead?.nextFollowupDate);
+    const end = new Date(); end.setHours(23,59,59,999);
+    return due > 0 && due <= end.getTime();
+  }
   if (filter === "OPEN") return item.status !== "CLOSED";
   if (filter === "IMPORTANT") return (contact.tags || []).includes("IMPORTANT");
   return true;
@@ -54,11 +68,17 @@ export function inboxCounts(conversations, options = {}) {
   const scoped = conversations.filter(item => inboxMatches(item, { ...options, filter: "ALL" }));
   return {
     ALL: scoped.length,
-    UNREAD: scoped.filter(item => Number(item.unreadCount || 0) > 0).length,
+    UNREAD: scoped.filter(item => Number(item.unreadCount || 0) > 0 || item.preferences?.manualUnread).length,
     OPEN: scoped.filter(item => item.status !== "CLOSED").length,
     IMPORTANT: scoped.filter(item => (item.contact?.tags || []).includes("IMPORTANT")).length,
-    messages: scoped.reduce((total, item) => total + Math.max(0, Number(item.unreadCount) || 0), 0)
+    messages: scoped.reduce((total, item) => total + Math.max(0, Number(item.unreadCount) || 0), 0),
+    ...Object.fromEntries(['READ','WINDOW','CLOSING','HOT','QUOTATION','FOLLOWUP','DUE','ARCHIVED'].map(filter => [filter, conversations.filter(item => inboxMatches(item, {...options,filter})).length]))
   };
+}
+
+function inboxTime(value) {
+  if (value?._seconds) return value._seconds * 1000;
+  return new Date(value || 0).getTime() || 0;
 }
 
 export function inboxOwners(users) {

@@ -24,9 +24,10 @@ test('status, owner, tag and search combine without changing records', () => {
 });
 
 test('unread chat counts and unread message counts remain distinct', () => {
-  assert.deepEqual(inboxCounts(conversations), { ALL: 4, UNREAD: 2, OPEN: 3, IMPORTANT: 1, messages: 4 });
-  assert.deepEqual(inboxCounts(conversations, { ownerFilter: 'ankit', filter: 'UNREAD' }), { ALL: 2, UNREAD: 1, OPEN: 2, IMPORTANT: 1, messages: 3 });
-  assert.deepEqual(inboxCounts(conversations, { tagFilter: 'missing' }), { ALL: 0, UNREAD: 0, OPEN: 0, IMPORTANT: 0, messages: 0 });
+  const legacyCounts = (...args) => Object.fromEntries(Object.entries(inboxCounts(...args)).filter(([key]) => ['ALL','UNREAD','OPEN','IMPORTANT','messages'].includes(key)));
+  assert.deepEqual(legacyCounts(conversations), { ALL: 4, UNREAD: 2, OPEN: 3, IMPORTANT: 1, messages: 4 });
+  assert.deepEqual(legacyCounts(conversations, { ownerFilter: 'ankit', filter: 'UNREAD' }), { ALL: 2, UNREAD: 1, OPEN: 2, IMPORTANT: 1, messages: 3 });
+  assert.deepEqual(legacyCounts(conversations, { tagFilter: 'missing' }), { ALL: 0, UNREAD: 0, OPEN: 0, IMPORTANT: 0, messages: 0 });
 });
 
 test('owner shortcuts use actual active users, deduplicated by ID', () => {
@@ -46,7 +47,7 @@ function createHarness({ mobile = false } = {}) {
   const source = app.slice(app.indexOf('async function login(event)'));
   const calls = [];
   const context = vm.createContext({
-    uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners, URL, Date, Intl, console,
+    uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners, URL, URLSearchParams, Date, Intl, console, setTimeout, clearTimeout,
     window: { matchMedia: () => ({ matches: mobile }) },
     document: { querySelector: () => null, querySelectorAll: () => [] },
     requestAnimationFrame: () => {},
@@ -83,6 +84,60 @@ test('generated inbox escapes client/user/tag content and retains existing CRM c
   }
   assert.ok(html.includes('data-wa-mode="TEXT" disabled'));
   assert.equal(calls.length, 0);
+});
+
+test('quick filters separate unread chats, reply windows, due work and private archives', () => {
+  const now = Date.now();
+  const items = [
+    {conversationId:'1', lastInboundAt:new Date(now-23.5*3600000), nextFollowUpAt:new Date(now-60000), preferences:{manualUnread:true}, lead:{leadStatus:'QUOTATION_SENT',interestLevel:'HIGH'}},
+    {conversationId:'2', lastInboundAt:new Date(now-25*3600000), preferences:{archived:true}, unreadCount:2},
+    {conversationId:'3', status:'OPEN',unreadCount:0}
+  ];
+  const counts=inboxCounts(items);
+  assert.equal(counts.ALL,2);assert.equal(counts.UNREAD,1);assert.equal(counts.READ,1);
+  assert.equal(counts.WINDOW,1);assert.equal(counts.CLOSING,1);assert.equal(counts.DUE,1);
+  assert.equal(counts.HOT,1);assert.equal(counts.QUOTATION,1);assert.equal(counts.ARCHIVED,1);
+  assert.equal(inboxMatches(items[2],{filter:'WINDOW'}),false);
+});
+
+test('complete inbox sync drains every cursor and carries the server cutoff', async () => {
+  const {context}=createHarness();const requests=[];const cutoff='2026-09-08T10:00:00.000Z';
+  context.pageRequest=async path=>{
+    requests.push(path);
+    const second=path.includes('cursor=next');
+    return {data:Array.from({length:second?35:100},(_,i)=>({conversationId:`c${second?i+100:i}`})),pagination:{hasMore:!second,nextCursor:second?null:'next'},meta:{syncStartedAt:cutoff}};
+  };
+  vm.runInContext('api = pageRequest',context);
+  const result=await vm.runInContext('inboxAllPages("/conversations?limit=100")',context);
+  assert.equal(result.data.length,135);assert.equal(requests.length,2);assert.ok(requests[1].includes(encodeURIComponent(cutoff)));assert.equal(result.meta.syncStartedAt,cutoff);
+});
+
+test('failed or repeated pages reject the sync so a checkpoint cannot advance', async () => {
+  const {context}=createHarness();context.brokenPage=async()=>({data:[],pagination:{hasMore:true,nextCursor:'same'}});
+  vm.runInContext('api=brokenPage',context);
+  await assert.rejects(vm.runInContext('inboxAllPages("/conversations?limit=100")',context),/invalid cursor/);
+});
+
+test('each conversation retains its draft, including a deliberately cleared draft', () => {
+  const {context,wa}=createHarness();wa.conversations=structuredClone(conversations);wa.selectedId='a';wa.mode='TEXT';wa.conversations[0].lastInboundAt=new Date();wa.conversations[0].preferences={draft:'Server saved draft'};
+  wa.overview={contact:wa.conversations[0].contact,orders:[]};wa.drafts.a='';
+  vm.runInContext('renderWhatsappPage()',context);assert.ok(!context.page.innerHTML.includes('Server saved draft</textarea>'));
+  wa.drafts.a='Draft for North';vm.runInContext('renderWhatsappPage()',context);assert.ok(context.page.innerHTML.includes('Draft for North'));
+  wa.selectedId='c';wa.overview={contact:wa.conversations[2].contact,orders:[]};vm.runInContext('renderWhatsappPage()',context);assert.ok(!context.page.innerHTML.includes('Draft for North'));
+});
+
+test('reply composer trusts the server window instead of the local message arrival time', () => {
+  const {context,wa}=createHarness();
+  wa.conversations=[{conversationId:'a',lastInboundAt:new Date(Date.now()-25*3600000)}];wa.selectedId='a';
+  wa.messages=[{direction:'INBOUND',createdAt:new Date()}];
+  assert.equal(vm.runInContext('whatsappWindow().open',context),false);
+});
+
+test('retrying the same unsatisfied send preserves its idempotency key', () => {
+  const {context}=createHarness();
+  const first=vm.runInContext('smartSendKey("a",{type:"TEXT",text:"Hello"})',context);
+  assert.equal(vm.runInContext('smartSendKey("a",{type:"TEXT",text:"Hello"})',context),first);
+  assert.notEqual(vm.runInContext('smartSendKey("a",{type:"TEXT",text:"Changed"})',context),first);
 });
 
 test('reply composer preserves drafts, attachment input and labelled icon controls', () => {

@@ -292,19 +292,19 @@ async function renderWhatsapp(requestedConversationId) {
   pageTitle.textContent = "WhatsApp Inbox";
   const wa = state.whatsapp;
   wa.mobileChatOpen = Boolean(requestedConversationId);
-  wa.cache ||= createChatCache(state.session?.email);
+  wa.cache ||= createChatCache([state.session?.email, state.session?.role, state.session?.clientScope, state.session?.userId].join(":"));
   await hydrateWhatsappCache(requestedConversationId);
   if (wa.conversations.length) renderWhatsappPage();
 
   const syncStartedAt = Date.now();
-  const checkpointIsFresh = wa.syncedAt && syncStartedAt - Number(wa.syncedAt) < WHATSAPP_FULL_SYNC_AFTER_MS;
+  const checkpointIsFresh = wa.fullSyncedAt && wa.syncedAt && syncStartedAt - Number(wa.syncedAt) < WHATSAPP_FULL_SYNC_AFTER_MS;
   const conversationQuery = checkpointIsFresh
     ? `/conversations?limit=100&from=${encodeURIComponent(new Date(Math.max(0, Number(wa.syncedAt) - WHATSAPP_SYNC_OVERLAP_MS)).toISOString())}&sortBy=updatedAt&sortOrder=asc`
-    : "/conversations?limit=100&sortBy=lastMessageAt&sortOrder=desc";
+    : "/conversations?limit=100&sortBy=updatedAt&sortOrder=asc";
   let networkResults;
   try {
     networkResults = await Promise.all([
-      api(conversationQuery),
+      inboxAllPages(conversationQuery),
       wa.templates.length ? Promise.resolve({ data: wa.templates }) : api("/whatsapp/utility-templates"),
       wa.quickReplies.length ? Promise.resolve({ data: wa.quickReplies }) : optionalInboxApi("/whatsapp/quick-replies?limit=100", []),
       wa.users.length ? Promise.resolve({ data: wa.users }) : optionalInboxApi("/users?limit=100", []),
@@ -323,6 +323,7 @@ async function renderWhatsapp(requestedConversationId) {
   wa.conversations = sortWhatsappConversations(
     checkpointIsFresh ? mergeById(wa.conversations, conversationUpdates, "conversationId") : conversationUpdates
   );
+  for (const item of conversationUpdates) if (!wa.draftDirty.has(conversationId(item))) wa.drafts[conversationId(item)] = item.preferences?.draft || "";
   wa.templates = templateResult.data;
   wa.quickReplies = quickReplyResult.data || [];
   wa.users = (usersResult.data || []).filter((item) => item.active !== false);
@@ -337,7 +338,8 @@ async function renderWhatsapp(requestedConversationId) {
     const incoming = await loadWhatsappConversation(wa.selectedId, { incremental: useIncrementalMessages });
     await refreshChangedMessageMarkers(conversationUpdates, new Set(incoming.map((item) => item.messageId || item.id)));
   }
-  wa.syncedAt = serverSyncTime(conversationResult, syncStartedAt);
+  wa.syncedAt = asDate(conversationResult.meta?.syncStartedAt)?.getTime() || syncStartedAt;
+  if (!checkpointIsFresh) { wa.fullSyncedAt = syncStartedAt; await chatCacheCall(wa.cache, "replaceConversations", wa.conversations); }
   await Promise.all([
     chatCacheCall(wa.cache, "putConversations", wa.conversations),
     chatCacheCall(wa.cache, "setMeta", "conversationSyncAt", wa.syncedAt)
@@ -370,11 +372,15 @@ async function loadCachedWhatsappConversation(id) {
   const wa = state.whatsapp;
   const selected = wa.conversations.find((item) => conversationId(item) === id);
   if (!selected) return;
-  const [messages, cachedOverview] = await Promise.all([
+  const [messages, cachedOverview, localDraft] = await Promise.all([
     chatCacheCall(wa.cache, "getMessages", id),
-    chatCacheCall(wa.cache, "getOverview", selected.contactId)
+    chatCacheCall(wa.cache, "getOverview", selected.contactId),
+    chatCacheCall(wa.cache, "getMeta", `draft:${id}`)
   ]);
+  if (wa.selectedId !== id) return;
   wa.messages = messages || [];
+  wa.olderCursor = wa.messages.length ? btoa(JSON.stringify({id:wa.messages[0].messageId || wa.messages[0].id})).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_') : null;
+  if ((typeof localDraft === "string" || localDraft?.pending) && !Object.hasOwn(wa.drafts,id)) { wa.drafts[id] = typeof localDraft === "string" ? localDraft : localDraft.text; wa.draftDirty.add(id); }
   wa.messagesConversationId = id;
   wa.overview = cachedOverview?.value || null;
   wa.overviewCachedAt = asDate(cachedOverview?.cachedAt)?.getTime() || 0;
@@ -407,12 +413,14 @@ async function loadWhatsappConversation(id, { incremental = false } = {}) {
     const latest = Math.max(...wa.messages.map((item) => asDate(item.createdAt)?.getTime() || 0));
     if (latest) query.set("from", new Date(Math.max(0, latest - WHATSAPP_SYNC_OVERLAP_MS)).toISOString());
   }
-  const requests = [api(`/conversations/${encodeURIComponent(id)}/messages?${query}`)];
+  const requests = [hasBaseline ? inboxAllPages(`/conversations/${encodeURIComponent(id)}/messages?${query}`) : api(`/conversations/${encodeURIComponent(id)}/messages?${query}`)];
   const overviewIsStale = !wa.overviewCachedAt || Date.now() - wa.overviewCachedAt > 5 * 60 * 1000;
   if (!wa.overview || wa.overview.contact?.contactId !== selected.contactId || overviewIsStale) {
     requests.push(api(`/contacts/${encodeURIComponent(selected.contactId)}/overview`));
   }
   const [messageResult, overviewResult] = await Promise.all(requests);
+  if (wa.selectedId !== id) return [];
+  if (!hasBaseline) wa.olderCursor = messageResult.pagination?.hasMore ? messageResult.pagination.nextCursor : null;
   const incoming = hasBaseline ? messageResult.data : [...messageResult.data].reverse();
   wa.messages = (hasBaseline ? mergeById(wa.messages, incoming, "messageId") : incoming)
     .sort((left, right) => (asDate(left.createdAt)?.getTime() || 0) - (asDate(right.createdAt)?.getTime() || 0));
@@ -449,9 +457,10 @@ function syncWhatsappComposerMode({ conversationChanged = false } = {}) {
   if (conversationChanged || !wa.composerModeTouched) wa.mode = "TEXT";
 }
 
-function renderWhatsappPage(draftText = "") {
+function renderWhatsappPage(draftText) {
   const wa = state.whatsapp;
   const selected = selectedConversation();
+  draftText ??= wa.drafts[wa.selectedId] ?? selected?.preferences?.draft ?? "";
   const syncIndicator = whatsappSyncIndicator();
   const viewport = captureWhatsappViewport();
   releaseMediaObjectUrls();
@@ -468,13 +477,15 @@ function renderWhatsappPage(draftText = "") {
             </div>
           </header>
           <label class="wa-search-wrap">${uiIcon("search")}<span class="sr-only">Search conversations</span><input id="wa-search" class="wa-search" type="search" placeholder="Search or start a new chat" value="${attr(wa.search)}" /></label>
-          <div class="wa-filters" aria-label="Filter conversations">${waFilterButton("ALL", "All")}${waFilterButton("UNREAD", "Unread")}${waFilterButton("OPEN", "Open")}${waFilterButton("IMPORTANT", "Important")}</div>
+          <div class="wa-filters" aria-label="Filter conversations">${waFilterButton("ALL", "All")}${waFilterButton("UNREAD", "Unread")}${waFilterButton("READ", "Read")}${waFilterButton("WINDOW", "Reply open")}${waFilterButton("IMPORTANT", "Favourites")}</div>
           ${waQuickFilters()}
+          <div class="wa-smart-circles" aria-label="Priority filters">${[['DUE','Due'],['CLOSING','Closing'],['HOT','Hot'],['QUOTATION','Quote'],['FOLLOWUP','Follow-up'],['ARCHIVED','Archived']].map(([key,label]) => waFilterButton(key,label)).join('')}</div>
+          <div class="wa-smart-sort"><label>Sort <select id="wa-smart-sort"><option value="RECENT" ${wa.sort === 'RECENT' ? 'selected' : ''}>Recent</option><option value="PRIORITY" ${wa.sort === 'PRIORITY' ? 'selected' : ''}>Connect next</option></select></label><button id="wa-smart-refresh" type="button">Refresh</button></div>
           <div class="wa-inbox-counts" id="wa-inbox-counts" aria-live="polite">${waInboxSummary()}</div>
         </div>
         <div class="wa-conversation-list" id="wa-conversation-list">${waConversationList()}</div>
       </aside>
-      ${selected ? whatsappChatMarkup(selected, draftText) : `<section class="wa-no-chat"><div class="wa-empty-icon">${uiIcon("chat")}</div><h3>No WhatsApp conversation yet</h3><p>Open a client profile and choose <strong>Open WhatsApp</strong>. The first outbound message must be an approved Utility template.</p><a class="button button-primary" href="#clients">Choose a client</a></section>`}
+      ${selected ? whatsappChatMarkup(selected, draftText) : `<section class="wa-no-chat"><div class="wa-empty-icon">${uiIcon("chat")}</div><h3>No WhatsApp conversation yet</h3><p>Open a client profile and choose <strong>Open WhatsApp</strong>. Choose a relevant approved template when the reply window is closed.</p><a class="button button-primary" href="#clients">Choose a client</a></section>`}
     </div>`;
   bindWhatsappEvents();
   if (selected) {
@@ -497,15 +508,16 @@ function whatsappChatMarkup(conversation, draftText) {
       <header class="wa-chat-head">
         <a class="wa-mobile-back" href="#whatsapp" aria-label="Back to conversations">${uiIcon("back")}</a><div class="wa-chat-person"><span class="wa-avatar" style="${avatarStyle(name)}">${esc(initials(name))}</span><div><strong>${esc(name)}</strong><small>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "")}</small></div></div>
         <div class="wa-chat-actions">
-          <span class="wa-window ${windowStatus.open ? "open" : "closed"}">${windowStatus.open ? `Free reply · ${esc(windowStatus.remaining)}` : "Utility template required"}</span>
+          <span class="wa-window ${windowStatus.open ? "open" : "closed"}">${windowStatus.open ? `Free reply · ${esc(windowStatus.remaining)}` : "Approved template required"}</span>
           ${contact.primaryPhone ? `<a class="wa-icon-button" href="tel:+${attr(contact.primaryPhone)}" title="Call customer" aria-label="Call customer">${uiIcon("phone")}</a>` : ""}
           <button class="wa-icon-button wa-details-button" id="wa-toggle-client-panel" type="button" title="Client workspace" aria-label="Client workspace" aria-expanded="${wa.clientPanelOpen}" aria-controls="wa-client-workspace">${uiIcon("info")}</button>
           <button class="wa-icon-button ${important ? "important" : ""}" id="wa-toggle-important" title="${important ? "Remove Important" : "Mark Important"}">${uiIcon("star")}</button>
           <button class="wa-icon-button" id="wa-toggle-status" title="${conversation.status === "CLOSED" ? "Reopen" : "Close"} conversation">${uiIcon(conversation.status === "CLOSED" ? "refresh" : "check")}</button>
         </div>
       </header>
+      ${smartChatToolbar()}
       <div class="wa-message-list" id="wa-message-list">
-        <div class="wa-day-chip">Conversation history</div>
+        <div class="wa-day-chip">Conversation history</div>${wa.olderCursor ? '<button class="wa-load-older" id="wa-load-older" type="button">Load earlier messages</button>' : ""}
         ${wa.messages.length ? wa.messages.map(waMessage).join("") : '<div class="wa-chat-empty">No messages yet. Use a Utility template to start this conversation.</div>'}
       </div>
       ${waComposer(windowStatus, draftText)}
@@ -522,15 +534,16 @@ function waComposer(windowStatus, draftText) {
   const quoted = wa.messages.find((item) => item.messageId === wa.replyToMessageId);
   const approvedTemplateAvailable = visibleTemplates.length > 0;
   return `<div class="wa-composer">
+    <div class="wa-smart-emoji">${["😊","👍","🙏","✅","📦","🎨"].map(emoji=>`<button type="button" data-insert-emoji="${emoji}" aria-label="Insert ${emoji}">${emoji}</button>`).join("")}<button id="wa-save-quick-reply" type="button">Save quick reply</button></div>
     <div class="wa-compose-tabs">
       <button class="${useText ? "active" : ""}" data-wa-mode="TEXT" ${windowStatus.open ? "" : "disabled"}>Reply</button>
-      <button class="${!useText ? "active" : ""}" data-wa-mode="TEMPLATE">Utility update <span>low cost</span></button>
+      <button class="${!useText ? "active" : ""}" data-wa-mode="TEMPLATE">Utility update</button>
       <small>${windowStatus.open ? "Customer replied within 24 hours" : "Normal reply is locked outside 24 hours"}</small>
     </div>
     ${useText ? `<form id="wa-composer-form" class="wa-text-composer">
         <div class="wa-composer-toolbar">
           <select id="wa-quick-reply"><option value="">Quick reply…</option>${wa.quickReplies.map((item) => `<option value="${attr(item.quickReplyId)}">${esc(item.shortcut)} · ${esc(item.title)}</option>`).join("")}<option value="__CREATE__">+ Add custom quick reply</option></select>
-          <label class="wa-tool-button" title="Attach image, video, audio or document">${uiIcon("clip")}<span class="sr-only">Attach a file</span><input id="wa-attachment-input" class="sr-only" type="file" accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf" /></label>
+          <label class="wa-tool-button" title="Attach image, video, audio or document">${uiIcon("clip")}<span class="sr-only">Attach a file</span><input id="wa-attachment-input" class="sr-only" type="file" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf" /></label>
           <button class="wa-tool-button ${wa.recording ? "recording" : ""}" id="wa-record-audio" type="button" title="Record voice note" aria-label="${wa.recording ? "Stop recording" : "Record voice note"}">${wa.recording ? "■ Stop" : uiIcon("mic")}</button>
           <button class="wa-tool-button" id="wa-share-location" type="button" title="Share current location" aria-label="Share current location">${uiIcon("pin")}</button>
           <button class="wa-tool-button" id="wa-share-contact" type="button" title="Share a contact card" aria-label="Share a contact card">${uiIcon("people")}</button>
@@ -562,6 +575,7 @@ function waOrderPanel(contact) {
   const callReady = wa.capabilities?.externalSetup?.calling?.status || "META_ELIGIBILITY_REQUIRED";
   return `<div class="wa-client-card"><button class="wa-panel-close" id="wa-close-client-panel" type="button" aria-label="Close client workspace">×</button><p class="eyebrow">CLIENT WORKSPACE</p><h3>${esc(contact.companyName || contact.contactPerson || "Client")}</h3><p>${esc(contact.primaryPhone || "No phone")} · ${esc(contact.city || "City not set")}</p><a href="#client/${attr(contact.contactId || "")}">View complete profile →</a></div>
     <div class="wa-crm-controls">
+      ${smartClientControls()}
       <label>Conversation owner<select id="wa-assignee" ${canAssign && wa.users.length ? "" : "disabled"}><option value="">Unassigned</option>${wa.users.map((user) => `<option value="${attr(user.userId)}" ${assignedTo === user.userId ? "selected" : ""}>${esc(user.name || user.email || user.userId)}</option>`).join("")}</select></label>
       <div class="wa-tag-head"><strong>Tags</strong><button id="wa-add-tag" type="button">+ Add</button></div>
       <div class="wa-tag-list">${tags.length ? tags.map((tag) => `<span>${esc(pretty(tag))}<button data-remove-tag="${attr(tag)}" type="button">×</button></span>`).join("") : "<small>No tags yet</small>"}</div>
@@ -589,13 +603,13 @@ function waOrderCard(order) {
 
 function waConversationList() {
   const wa = state.whatsapp;
-  const items = wa.conversations.filter((item) => inboxMatches(item, wa));
+  const items = smartSort(wa.conversations.filter((item) => inboxMatches(item, wa)));
   if (!items.length) return '<div class="wa-no-results">No matching conversations.</div>';
   return items.map((item) => {
     const contact = item.contact || {};
     const name = contact.companyName || contact.contactPerson || contact.primaryPhone || "WhatsApp client";
     const active = conversationId(item) === wa.selectedId;
-    return `<button class="wa-conversation ${active ? "active" : ""} ${Number(item.unreadCount || 0) > 0 ? "unread" : ""}" data-conversation-id="${attr(conversationId(item))}" aria-label="Open chat with ${attr(name)}" ${active ? 'aria-current="true"' : ""}><span class="wa-avatar" style="${avatarStyle(name)}">${esc(initials(name))}</span><span class="wa-conversation-copy"><span><strong>${esc(name)}</strong><time>${esc(shortTime(item.lastMessageAt))}</time></span><small>${esc(item.lastMessagePreview || "No messages yet")}</small></span>${Number(item.unreadCount || 0) ? `<b>${esc(item.unreadCount)}</b>` : ""}</button>`;
+    return `<button class="wa-conversation ${active ? "active" : ""} ${Number(item.unreadCount || 0) > 0 ? "unread" : ""}" data-conversation-id="${attr(conversationId(item))}" aria-label="Open chat with ${attr(name)}" ${active ? 'aria-current="true"' : ""}><span class="wa-avatar" style="${avatarStyle(name)}">${esc(initials(name))}</span><span class="wa-conversation-copy"><span><strong>${esc(name)}</strong><time>${esc(shortTime(item.lastMessageAt))}</time></span><small>${item.preferences?.pinned ? "📌 " : ""}${item.preferences?.muted ? "🔕 " : ""}${esc(item.lastMessagePreview || "No messages yet")}</small>${smartConversationHint(item)}</span>${Number(item.unreadCount || 0) ? `<b>${esc(item.unreadCount)}</b>` : ""}</button>`;
   }).join("");
 }
 
@@ -614,13 +628,15 @@ function waMessage(message) {
   const body = message.type === "REACTION"
     ? `<div class="wa-reaction-message">${esc(message.text || "♡")}</div>`
     : `${waStructuredMessage(message)}${mediaBody}${message.text ? `<p>${linkify(message.text)}</p>` : (!attachments.length && !recoverableMedia && !waHasStructuredBody(message) ? `<p>[${esc(pretty(message.type))}]</p>` : "")}`;
-  return `<div class="wa-message-row ${outbound ? "outbound" : internal ? "internal" : "inbound"}" data-message-row="${attr(message.messageId)}">
+  return `<div class="wa-message-row ${outbound ? "outbound" : internal ? "internal" : "inbound"}" data-message-row="${attr(message.messageId)}" ${smartVisibleMessages().some(item => item.messageId === message.messageId) ? "" : "hidden"}>
     <div class="wa-bubble">
       ${quoted ? `<div class="wa-quoted"><small>${quoted.direction === "INBOUND" ? "Customer" : "RX team"}</small><p>${esc(quoted.text || `[${pretty(quoted.type)}]`)}</p></div>` : ""}
       ${body}
       <span class="wa-message-meta"><time>${esc(shortTime(message.createdAt))}</time>${status}</span>
       ${message.type === "TEMPLATE" ? `<em>${esc(pretty(message.metadata?.templateCategory || "TEMPLATE"))}</em>` : ""}
+      ${message.status === "DELIVERY_UNKNOWN" ? '<div class="wa-message-error">Delivery uncertain · check provider before resending</div>' : ""}
       ${message.status === "FAILED" ? `<div class="wa-message-error"><strong>Send failed</strong><span>${esc(message.errorMessage || message.errorCode || "WhatsApp rejected this message.")}</span><button data-retry-message="${attr(message.messageId)}" type="button">Retry</button></div>` : ""}
+      <div class="wa-message-tools"><button data-star-message="${attr(message.messageId)}" type="button" aria-label="Star message">${selectedConversation()?.preferences?.starredMessageIds?.includes(message.messageId) ? '★' : '☆'}</button>${message.text ? `<button data-copy-message="${attr(message.messageId)}" type="button">Copy</button><button data-use-message="${attr(message.messageId)}" type="button">Use as draft</button>` : ''}</div>
       ${!internal && message.type !== "REACTION" ? `<div class="wa-message-actions"><button data-reply-message="${attr(message.messageId)}" type="button" title="Reply">↩</button><button data-react-message="${attr(message.messageId)}" data-react-emoji="👍" type="button" title="React">👍</button></div>` : ""}
     </div>
   </div>`;
@@ -680,6 +696,7 @@ function waHasStructuredBody(message) {
 }
 
 function bindWhatsappEvents() {
+  bindSmartInbox();
   document.querySelector("#wa-search")?.addEventListener("input", (event) => {
     state.whatsapp.search = event.target.value;
     refreshWhatsappLiveDom();
@@ -778,6 +795,7 @@ function bindWhatsappEvents() {
 }
 
 function bindWhatsappMessageEvents() {
+  bindSmartMessageTools();
   bindMediaEvents();
   document.querySelectorAll("[data-reply-message]").forEach((button) => button.addEventListener("click", () => {
     state.whatsapp.replyToMessageId = button.dataset.replyMessage;
@@ -943,6 +961,8 @@ function releaseMediaObjectUrls() {
 
 function bindConversationRows() {
   document.querySelectorAll("[data-conversation-id]").forEach((button) => button.addEventListener("click", () => {
+    saveSmartDraft();
+    state.whatsapp.messageSearch = ""; state.whatsapp.starredOnly = false;
     state.whatsapp.clientPanelOpen = false;
     state.whatsapp.composerModeTouched = false;
     location.hash = `#whatsapp/${button.dataset.conversationId}`;
@@ -952,10 +972,13 @@ function bindConversationRows() {
 async function sendWhatsappMessage(event) {
   event.preventDefault();
   const wa = state.whatsapp;
+  const sendingId = wa.selectedId;
+  const sendingOrderId = wa.selectedOrderId;
   const button = event.submitter;
   button.disabled = true;
   try {
     let body;
+    if (wa.mode === 'TEXT' && !whatsappWindow().open) throw new Error('The reply window has closed. Select a relevant approved template before sending.');
     if (wa.mode === "TEXT" && whatsappWindow().open) {
       const text = document.querySelector("#wa-message-input").value.trim();
       if (!text) return;
@@ -974,25 +997,31 @@ async function sendWhatsappMessage(event) {
       let attachmentIds = [];
       if (headerFile) {
         button.textContent = "Uploading video...";
-        const attachment = await uploadAttachment(headerFile, wa.overview.contact.contactId, wa.selectedId);
+        const attachment = await uploadAttachment(headerFile, wa.overview.contact.contactId, sendingId);
         attachmentIds = [attachment.attachmentId || attachment.id];
         button.textContent = "Queueing update...";
       }
       body = { type: "TEMPLATE", utilityTemplateId: template.id, templateVariables: wa.templateValues, attachmentIds };
     }
-    const { data: sendResult } = await api(`/conversations/${encodeURIComponent(wa.selectedId)}/messages`, {
+    const { data: sendResult } = await api(`/conversations/${encodeURIComponent(sendingId)}/messages`, {
       method: "POST",
-      headers: { "idempotency-key": `${wa.selectedId}-${Date.now()}-${Math.random().toString(36).slice(2)}` },
+      headers: { "idempotency-key": smartSendKey(sendingId,body) },
       body: body.type === "TEMPLATE"
-        ? { ...body, templateVariables: { ...body.templateVariables, order_id: wa.selectedOrderId || "" } }
+        ? { ...body, templateVariables: { ...body.templateVariables, order_id: sendingOrderId || "" } }
         : body
     });
     if (sendResult?.queued !== true && sendResult?.sent !== true) {
       throw new Error(policyFailureMessage(sendResult?.reason));
     }
+    delete wa.pendingSends[sendingId];
+    clearTimeout(wa.draftTimers[sendingId]);
+    await chatCacheCall(wa.cache,"setMeta",`draft:${sendingId}`,"");
+    wa.drafts[sendingId] = "";
+    await saveSmartPreference({ draft: "" }, sendingId).catch(() => {});
+    if (sendingId !== wa.selectedId) { notify("Message queued in the original conversation."); return; }
     wa.replyToMessageId = null;
     wa.utilityHeaderFile = null;
-    await loadWhatsappConversation(wa.selectedId, { incremental: true });
+    await loadWhatsappConversation(sendingId, { incremental: true });
     renderWhatsappPage();
     notify(body.type === "TEMPLATE" ? "Utility update queued for WhatsApp." : "Message queued for WhatsApp.");
   } catch (error) {
@@ -1051,6 +1080,7 @@ async function selectQuickReply(event) {
   const input = document.querySelector("#wa-message-input");
   if (reply && input) {
     input.value = reply.text;
+    saveSmartDraft();
     input.focus();
     input.setSelectionRange(input.value.length, input.value.length);
   }
@@ -1078,14 +1108,17 @@ async function createCustomQuickReply() {
 }
 
 async function sendSelectedAttachment(event) {
-  const file = event.target.files?.[0];
+  const files = Array.from(event.target.files || []).slice(0, 10);
   event.target.value = "";
-  if (!file) return;
-  await sendAttachmentFile(file, document.querySelector("#wa-message-input")?.value.trim() || "");
+  const caption = document.querySelector("#wa-message-input")?.value.trim() || "";
+  const id = state.whatsapp.selectedId;
+  for (const [index, file] of files.entries()) { if (state.whatsapp.selectedId !== id) {notify("Chat changed. Remaining attachments were not sent.");break;} await sendAttachmentFile(file, index === 0 ? caption : ""); }
 }
 
 async function sendAttachmentFile(file, caption = "") {
   const wa = state.whatsapp;
+  const sendingId = wa.selectedId;
+  const sendingOrderId = wa.selectedOrderId;
   const conversation = selectedConversation();
   if (!conversation || !wa.overview?.contact?.contactId) return;
   if (!whatsappWindow().open) {
@@ -1095,10 +1128,10 @@ async function sendAttachmentFile(file, caption = "") {
   const kind = messageTypeForFile(file);
   notify(`Uploading ${file.name || pretty(kind)}…`);
   try {
-    const attachment = await uploadAttachment(file, wa.overview.contact.contactId, wa.selectedId);
-    await api(`/conversations/${encodeURIComponent(wa.selectedId)}/messages`, {
+    const attachment = await uploadAttachment(file, wa.overview.contact.contactId, sendingId);
+    const { data: queued } = await api(`/conversations/${encodeURIComponent(sendingId)}/messages`, {
       method: "POST",
-      headers: { "idempotency-key": `${wa.selectedId}-media-${Date.now()}-${Math.random().toString(36).slice(2)}` },
+      headers: { "idempotency-key": `${sendingId}-media-${Date.now()}-${Math.random().toString(36).slice(2)}` },
       body: {
         type: kind,
         text: kind === "AUDIO" ? "" : caption,
@@ -1106,8 +1139,10 @@ async function sendAttachmentFile(file, caption = "") {
         replyToMessageId: wa.replyToMessageId || null
       }
     });
+    if (!queued?.queued && !queued?.sent) throw new Error(policyFailureMessage(queued?.reason));
+    if (sendingId !== wa.selectedId) { notify("Attachment queued in the original conversation."); return; }
     wa.replyToMessageId = null;
-    await loadWhatsappConversation(wa.selectedId, { incremental: true });
+    await loadWhatsappConversation(sendingId, { incremental: true });
     renderWhatsappPage();
     notify(`${pretty(kind)} queued for WhatsApp.`);
   } catch (error) {
@@ -1412,8 +1447,8 @@ async function createWhatsappFollowup(event) {
   const button = event.currentTarget;
   const dueAt = document.querySelector("#wa-followup-at")?.value;
   const notes = document.querySelector("#wa-followup-note")?.value.trim() || "";
-  if (!dueAt) {
-    notify("Select a follow-up date and time.", true);
+  if (!dueAt || new Date(dueAt).getTime() <= Date.now()) {
+    notify("Select a future follow-up date and time.", true);
     return;
   }
   button.disabled = true;
@@ -1431,6 +1466,8 @@ async function createWhatsappFollowup(event) {
     });
     const { data } = await api(`/contacts/${encodeURIComponent(state.whatsapp.overview.contact.contactId)}/overview`);
     state.whatsapp.overview = data;
+    state.whatsapp.fullSyncedAt = null;
+    selectedConversation().nextFollowUpAt = data.followUps.filter(f=>f.status === "SCHEDULED").sort((a,b)=>asDate(a.dueAt)-asDate(b.dueAt))[0]?.dueAt || null;
     renderWhatsappPage();
     notify("Follow-up scheduled.");
   } catch (error) {
@@ -1469,13 +1506,14 @@ async function markSelectedConversationRead() {
   // On phones, the list and chat occupy separate screens. Viewing the list
   // must not mark an automatically selected, hidden conversation as read.
   if (window.matchMedia("(max-width: 680px)").matches && !wa.mobileChatOpen) return;
+  if (selectedConversation()?.preferences?.manualUnread) return;
   const unread = [...wa.messages].reverse().find((item) => item.direction === "INBOUND" && item.status !== "READ");
   if (!unread) return;
   try {
-    await api(`/messages/${encodeURIComponent(unread.messageId)}/mark-read`, { method: "POST", body: {} });
+    const result = await api(`/messages/${encodeURIComponent(unread.messageId)}/mark-read`, { method: "POST", body: {} });
     wa.messages.filter((item) => item.direction === "INBOUND").forEach((item) => { item.status = "READ"; });
     const conversation = selectedConversation();
-    if (conversation) conversation.unreadCount = 0;
+    if (conversation) conversation.unreadCount = result.data?.conversationUnreadCount || 0;
     updateWhatsappFilterCounts();
     const list = document.querySelector("#wa-conversation-list");
     if (list) { list.innerHTML = waConversationList(); bindConversationRows(); }
@@ -1507,17 +1545,21 @@ async function pollWhatsapp() {
   try {
     const syncStartedAt = Date.now();
     const from = new Date(Math.max(0, Number(wa.syncedAt || syncStartedAt) - WHATSAPP_SYNC_OVERLAP_MS)).toISOString();
-    const result = await api(`/conversations?limit=100&from=${encodeURIComponent(from)}&sortBy=updatedAt&sortOrder=asc`);
+    const full = !wa.fullSyncedAt || syncStartedAt - wa.fullSyncedAt > 15 * 60_000;
+    const result = await inboxAllPages(full ? "/conversations?limit=100&sortBy=updatedAt&sortOrder=asc" : `/conversations?limit=100&from=${encodeURIComponent(from)}&sortBy=updatedAt&sortOrder=asc`);
     const whatsappUpdates = result.data.filter((item) => item.currentChannel === "WHATSAPP");
+    for (const item of whatsappUpdates) if (!wa.draftDirty.has(conversationId(item))) wa.drafts[conversationId(item)] = item.preferences?.draft || "";
     const selectedChanged = whatsappUpdates.some((item) => conversationId(item) === wa.selectedId);
     const newlyUnread = whatsappUpdates.filter((item) => Number(item.unreadCount || 0) > Number(previousUnread.get(conversationId(item)) || 0));
-    wa.conversations = sortWhatsappConversations(mergeById(wa.conversations, whatsappUpdates, "conversationId"));
+    wa.conversations = sortWhatsappConversations(full ? whatsappUpdates : mergeById(wa.conversations, whatsappUpdates, "conversationId"));
+    if (full) { wa.fullSyncedAt = syncStartedAt; await chatCacheCall(wa.cache, "replaceConversations", wa.conversations); }
+    if (wa.selectedId && !selectedConversation()) { wa.selectedId = null; wa.messages = []; wa.overview = null; renderWhatsappPage(); }
     let incoming = [];
     if (selectedChanged) incoming = await loadWhatsappConversation(wa.selectedId, { incremental: true }) || [];
     const markerUpdates = selectedChanged
       ? await refreshChangedMessageMarkers(whatsappUpdates, new Set(incoming.map((item) => item.messageId || item.id)))
       : [];
-    wa.syncedAt = serverSyncTime(result, syncStartedAt);
+    wa.syncedAt = asDate(result.meta?.syncStartedAt)?.getTime() || syncStartedAt;
     wa.syncState = "live";
     await Promise.all([
       chatCacheCall(wa.cache, "putConversations", whatsappUpdates),
@@ -1528,6 +1570,7 @@ async function pollWhatsapp() {
     }
     if (incoming.some((item) => item.direction === "INBOUND")) markSelectedConversationRead();
     if (newlyUnread.length) showInboundNotification(newlyUnread[0]);
+    updateSmartReminders();
   } catch (error) {
     wa.syncState = "offline";
     updateWhatsappSyncBadge();
@@ -1583,19 +1626,7 @@ function refreshWhatsappLiveDom({ messagesChanged = false } = {}) {
     bindConversationRows();
     restoreScrollAnchor(list, listViewport, ".wa-conversation", "conversationId");
   }
-  if (!messagesChanged) return;
-  const body = document.querySelector("#wa-message-list");
-  if (!body) return;
-  const messageViewport = captureMessageViewport(body);
-  releaseMediaObjectUrls();
-  body.innerHTML = state.whatsapp.messages.length
-    ? state.whatsapp.messages.map(waMessage).join("")
-    : '<div class="wa-chat-empty">No messages yet. Use a Utility template to start this conversation.</div>';
-  bindWhatsappMessageEvents();
-  requestAnimationFrame(() => {
-    restoreMessageViewport(body, messageViewport);
-    installWhatsappMediaScrollStability(body);
-  });
+  if (messagesChanged) renderWhatsappPage();
 }
 
 function captureWhatsappViewport() {
@@ -1720,6 +1751,7 @@ function whatsappSyncIndicator() {
 }
 
 function showInboundNotification(conversation) {
+  if (conversation.preferences?.muted) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const contact = conversation.contact || {};
   const name = contact.companyName || contact.contactPerson || contact.primaryPhone || "WhatsApp customer";
@@ -1759,11 +1791,9 @@ function prefillUtilityValues(force) {
 }
 
 function whatsappWindow() {
-  const wa = state.whatsapp;
-  const inbound = [...wa.messages].reverse().find((item) => item.direction === "INBOUND");
-  const fallback = selectedConversation()?.customerServiceWindow?.expiresAt;
-  const inboundAt = asDate(inbound?.createdAt);
-  const expiresAt = inboundAt ? new Date(inboundAt.getTime() + 24 * 60 * 60 * 1000) : asDate(fallback);
+  const conversation = selectedConversation();
+  const inboundAt = asDate(conversation?.lastInboundAt);
+  const expiresAt = inboundAt ? new Date(inboundAt.getTime() + 86400000) : asDate(conversation?.customerServiceWindow?.expiresAt);
   const remainingMs = expiresAt ? expiresAt.getTime() - Date.now() : 0;
   return { open: remainingMs > 0, expiresAt, remaining: remainingMs > 0 ? compactDuration(remainingMs) : "Closed" };
 }
@@ -1846,7 +1876,7 @@ function messageStatusMarkup(status) {
   if (["QUEUED", "SENDING"].includes(normalized)) {
     return `<span class="wa-delivery-status ${normalized.toLowerCase()}" role="img" aria-label="${attr(label)}" title="${attr(label)}"><span class="wa-status-clock"></span></span>`;
   }
-  if (["FAILED", "CANCELLED"].includes(normalized)) {
+  if (["FAILED", "CANCELLED", "DELIVERY_UNKNOWN"].includes(normalized)) {
     return `<span class="wa-delivery-status failed" role="img" aria-label="${attr(label)}" title="${attr(label)}">!</span>`;
   }
   const paths = normalized === "SENT"
@@ -1875,6 +1905,7 @@ async function chatCacheCall(cache, method, ...args) {
 }
 function freshWhatsappState() {
   return {
+    drafts: {}, draftDirty: new Set(), draftTimers: {}, preferenceWrites: {}, pendingSends: {}, messageSearch: "", starredOnly: false, sort: "RECENT", olderCursor: null, fullSyncedAt: null, reminderKeys: new Set(),
     conversations: [],
     messages: [],
     templates: [],
@@ -3146,3 +3177,214 @@ function notify(message, error = false) { toast.textContent = message; toast.cla
 function readApiError(payload) { return payload.error?.message || payload.message || "Login failed. Please try again."; }
 function readSession() { try { return JSON.parse(localStorage.getItem(authKey)); } catch { return null; } }
 function saveSession() { localStorage.setItem(authKey, JSON.stringify(state.session)); }
+
+// Smart inbox helpers share the existing authenticated API and durable outbox.
+async function inboxAllPages(path) {
+  const items = []; const seen = new Set(); let cursor = null; let response; let syncStartedAt;
+  do {
+    response = await api(`${path}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+    if (!syncStartedAt && response.meta?.syncStartedAt) {
+      syncStartedAt = response.meta.syncStartedAt;
+      path += `&to=${encodeURIComponent(syncStartedAt)}`;
+    }
+    items.push(...(response.data || []));
+    const next = response.pagination?.hasMore ? response.pagination.nextCursor : null;
+    if (response.pagination?.hasMore && (!next || seen.has(next))) throw new Error('Inbox sync returned an invalid cursor. Refresh to retry.');
+    if (next) seen.add(next);
+    cursor = next;
+  } while (cursor);
+  return { ...response, meta: {...response.meta, syncStartedAt}, data: items };
+}
+
+function smartChatToolbar() {
+  const wa = state.whatsapp; const p = selectedConversation()?.preferences || {};
+  return `<div class="wa-smart-chat-tools"><div class="wa-smart-actions">${[['pinned','Pin','Pinned'],['archived','Archive','Unarchive'],['muted','Mute','Unmute'],['manualUnread','Mark unread','Mark read']].map(([key,off,on]) => `<button type="button" data-smart-pref="${key}" aria-pressed="${Boolean(p[key])}">${p[key] ? on : off}</button>`).join('')}<button id="wa-ai-suggest" type="button">✦ AI suggestion</button><button id="wa-prepare-sequence" type="button">Prepare sequence</button></div><div class="wa-chat-search"><input id="wa-message-search" type="search" placeholder="Search loaded messages" aria-label="Search loaded messages" value="${attr(wa.messageSearch)}"><label><input id="wa-starred-only" type="checkbox" ${wa.starredOnly ? 'checked' : ''}> Starred</label><small id="wa-search-match-count">${smartVisibleMessages().length} messages</small></div></div>`;
+}
+
+function smartVisibleMessages() {
+  const wa = state.whatsapp; const ids = selectedConversation()?.preferences?.starredMessageIds || [];
+  const needle = wa.messageSearch.trim().toLowerCase();
+  return wa.messages.filter(m => (!wa.starredOnly || ids.includes(m.messageId)) && (!needle || [m.text, ...(m.attachments || []).map(a => a.fileName)].join(' ').toLowerCase().includes(needle)));
+}
+
+function smartConversationHint(item) {
+  const lead = item.lead || {}; const p = item.preferences || {};
+  const inbound = asDate(item.lastInboundAt)?.getTime() || 0;
+  const remaining = inbound + 86400000 - Date.now();
+  const due = asDate(item.nextFollowUpAt || lead.nextFollowupDate);
+  const parts = [p.draft ? 'Draft saved' : '', p.manualUnread ? 'Marked unread' : '', remaining > 0 ? `Reply ${Math.ceil(remaining / 3600000)}h` : '', due ? `${due.getTime() < Date.now() ? 'Overdue' : 'Follow-up'} ${shortTime(due)}` : '', lead.leadStatus ? pretty(lead.leadStatus) : '', ...(Array.isArray(lead.productRequired) ? lead.productRequired : [])].filter(Boolean);
+  return parts.length ? `<em class="wa-smart-hint ${remaining > 0 && remaining < 3600000 ? 'urgent' : ''}">${esc(parts.join(' · '))}</em>` : '';
+}
+
+function smartSort(items) {
+  const score = item => {
+    const remaining = (asDate(item.lastInboundAt)?.getTime() || 0) + 86400000 - Date.now();
+    const due = asDate(item.nextFollowUpAt || item.lead?.nextFollowupDate)?.getTime() || Infinity;
+    return (due <= Date.now() ? 500 : 0) + (remaining > 0 && remaining < 3600000 ? 400 : 0) + (Number(item.unreadCount) > 0 || item.preferences?.manualUnread ? 200 : 0) + (['HIGH','VERY_HIGH'].includes(item.lead?.interestLevel) ? 100 : 0);
+  };
+  return [...items].sort((a,b) => Number(Boolean(b.preferences?.pinned)) - Number(Boolean(a.preferences?.pinned)) || (state.whatsapp.sort === 'PRIORITY' ? score(b) - score(a) : 0) || (asDate(b.lastMessageAt)?.getTime() || 0) - (asDate(a.lastMessageAt)?.getTime() || 0));
+}
+
+async function saveSmartPreference(patch, id = state.whatsapp.selectedId) {
+  const wa = state.whatsapp; if (!id) return;
+  if (Object.hasOwn(patch,"draft")) { wa.draftDirty.add(id); await chatCacheCall(wa.cache,"setMeta",`draft:${id}`,{text:patch.draft,pending:true}); }
+  const previous = wa.preferenceWrites[id] || Promise.resolve();
+  const task = previous.catch(() => {}).then(async () => {
+    const { data } = await api(`/conversations/${encodeURIComponent(id)}/preferences`, { method: 'PATCH', body: patch });
+    if (Object.hasOwn(patch,"draft") && wa.drafts[id] === patch.draft) { wa.draftDirty.delete(id); await chatCacheCall(wa.cache,"setMeta",`draft:${id}`,{text:patch.draft,pending:false}); }
+    const item = wa.conversations.find(c => conversationId(c) === id);
+    if (item) { item.preferences = data; await chatCacheCall(wa.cache, 'putConversations', [item]); }
+    return data;
+  });
+  wa.preferenceWrites[id] = task;
+  return task;
+}
+
+function saveSmartDraft() {
+  const wa = state.whatsapp; const input = document.querySelector('#wa-message-input'); const id = wa.selectedId;
+  if (!input || !id) return;
+  const value = input.value; wa.drafts[id] = value; wa.draftDirty.add(id);
+  chatCacheCall(wa.cache,"setMeta",`draft:${id}`,{text:value,pending:true});
+  clearTimeout(wa.draftTimers[id]);
+  wa.draftTimers[id] = setTimeout(() => saveSmartPreference({ draft: value }, id).catch(error => notify(`Draft kept on this screen; sync failed: ${error.message}`, true)), 500);
+}
+
+function bindSmartInbox() {
+  const wa = state.whatsapp;
+  const on = (id, event, fn) => document.querySelector(id)?.addEventListener(event, fn);
+  const run = fn => async event => { try { await fn(event); } catch (error) { notify(error.message, true); } };
+  on('#wa-message-input','input',saveSmartDraft);
+  on('#wa-message-input','keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); document.querySelector('#wa-composer-form')?.requestSubmit(document.querySelector('#wa-composer-form button[type="submit"]')); }
+    if (event.key === 'Escape') { wa.replyToMessageId = null; renderWhatsappPage(); }
+  });
+  on('#wa-smart-sort','change',event => { wa.sort = event.target.value; refreshWhatsappLiveDom(); });
+  on('#wa-smart-refresh','click',run(async () => { wa.fullSyncedAt = null; await pollWhatsapp(); }));
+  document.querySelectorAll('[data-smart-pref]').forEach(button => button.addEventListener('click',run(async () => {
+    const key = button.dataset.smartPref; button.disabled = true;
+    try { await saveSmartPreference({ [key]: !selectedConversation()?.preferences?.[key] }); renderWhatsappPage(); } finally { button.disabled = false; }
+  })));
+  const search = () => {
+    const visible = new Set(smartVisibleMessages().map(m => m.messageId));
+    document.querySelectorAll('[data-message-row]').forEach(row => { row.hidden = !visible.has(row.dataset.messageRow); });
+    const count = document.querySelector('#wa-search-match-count'); if (count) count.textContent = `${visible.size} messages`;
+  };
+  on('#wa-message-search','input',event => { wa.messageSearch = event.target.value; search(); });
+  on('#wa-starred-only','change',event => { wa.starredOnly = event.target.checked; search(); });
+  on('#wa-load-older','click',run(async event => {
+    const id = wa.selectedId; event.currentTarget.disabled = true;
+    const { data, pagination } = await api(`/conversations/${encodeURIComponent(id)}/messages?limit=100&sortOrder=desc&cursor=${encodeURIComponent(wa.olderCursor)}`);
+    if (id !== wa.selectedId) return;
+    wa.messages = mergeById(wa.messages,data,'messageId').sort((a,b) => asDate(a.createdAt) - asDate(b.createdAt));
+    wa.olderCursor = pagination?.hasMore ? pagination.nextCursor : null;
+    await chatCacheCall(wa.cache,'putMessages',data); renderWhatsappPage();
+  }));
+  on('#wa-ai-suggest','click',run(async event => {
+    const button = event.currentTarget; const id = wa.selectedId; button.disabled = true; button.textContent = 'Thinking…';
+    try {
+      const { data } = await api(`/conversations/${encodeURIComponent(id)}/suggest`, { method:'POST',body:{} });
+      if (id !== wa.selectedId) return;
+      const dialog = smartDialog('Review AI suggestion',`<p>${esc(data.reason || 'Review the reply before using it.')}</p><textarea id="wa-ai-draft" rows="7" maxlength="4096">${esc(data.reply || '')}</textarea><p>Nothing has been sent.${data.needsHuman ? ' This reply needs careful human review.' : ''}</p><button id="wa-use-ai" type="button">Use as draft</button>`);
+      dialog.querySelector('#wa-use-ai').onclick = () => { wa.drafts[id] = dialog.querySelector('#wa-ai-draft').value; saveSmartPreference({draft:wa.drafts[id]},id).catch(error=>notify(error.message,true)); dialog.close(); dialog.remove(); renderWhatsappPage(); };
+    } finally { button.disabled = false; button.textContent = '✦ AI suggestion'; }
+  }));
+  on('#wa-human-takeover','click',run(async () => {
+    const enabled = !selectedConversation()?.humanTakeover;
+    await api(`/conversations/${encodeURIComponent(wa.selectedId)}/human-takeover`,{method:'POST',body:{enabled}});
+    selectedConversation().humanTakeover = enabled; renderWhatsappPage();
+  }));
+  on('#wa-save-lead','click',run(async () => {
+    const lead = selectedConversation()?.lead; if (!lead) return;
+    const {data} = await api(`/leads/${encodeURIComponent(lead.leadId)}`,{method:'PATCH',body:{ leadStatus: document.querySelector('#wa-lead-stage').value, interestLevel: document.querySelector('#wa-lead-interest').value, productRequired: document.querySelector('#wa-product-required').value.split(',').map(v=>v.trim()).filter(Boolean) }});
+    selectedConversation().lead = data; renderWhatsappPage(); notify('Client follow-up stage saved.');
+  }));
+  document.querySelectorAll('[data-followup-days]').forEach(button=>button.addEventListener('click',()=>{
+    const time = new Date(); const days = Number(button.dataset.followupDays);
+    if (days === 0) time.setHours(time.getHours()+1); else {time.setDate(time.getDate()+days);time.setHours(10,0,0,0);}
+    time.setMinutes(time.getMinutes()-time.getTimezoneOffset());
+    document.querySelector('#wa-followup-at').value=time.toISOString().slice(0,16);
+  }));
+  document.querySelectorAll('[data-complete-followup]').forEach(button=>button.addEventListener('click',run(async()=>{
+    await api(`/followups/${encodeURIComponent(button.dataset.completeFollowup)}/complete`,{method:'POST',body:{outcome:'Completed from smart inbox'}});
+    wa.overviewCachedAt=0; await loadWhatsappConversation(wa.selectedId,{incremental:true}); wa.fullSyncedAt=null; renderWhatsappPage();
+  })));
+  on('#wa-prepare-sequence','click',openSmartSequence);
+  on('#wa-save-quick-reply','click',run(async()=>{
+    const text=document.querySelector('#wa-message-input')?.value.trim(); if(!text) throw new Error('Type a reply first.');
+    const title=prompt('Quick reply name'); if(!title?.trim())return;
+    const shortcut = prompt('Shortcut, for example /delivery'); if (!shortcut?.trim()) return;
+    await api('/whatsapp/quick-replies',{method:'POST',body:{title:title.trim(),text,shortcut:shortcut.trim()}});
+    wa.quickReplies=(await api('/whatsapp/quick-replies?limit=100')).data; renderWhatsappPage();notify('Quick reply saved.');
+  }));
+  document.querySelectorAll('[data-insert-emoji]').forEach(button=>button.addEventListener('click',()=>{
+    const input=document.querySelector('#wa-message-input'); if(!input)return;
+    input.setRangeText(button.dataset.insertEmoji,input.selectionStart,input.selectionEnd,'end');input.focus();saveSmartDraft();
+  }));
+}
+
+function bindSmartMessageTools() {
+  const bind = (selector,fn) => document.querySelectorAll(selector).forEach(button=>button.addEventListener('click',async()=>{try{await fn(button);}catch(error){notify(error.message,true);}}));
+  bind('[data-star-message]',async button=>{
+    const ids = new Set(selectedConversation()?.preferences?.starredMessageIds || []); const id=button.dataset.starMessage;
+    if(ids.has(id))ids.delete(id);else ids.add(id);
+    await saveSmartPreference({starredMessageIds:[...ids]});renderWhatsappPage();
+  });
+  bind('[data-copy-message]',async button=>{await navigator.clipboard.writeText(state.whatsapp.messages.find(m=>m.messageId===button.dataset.copyMessage)?.text || '');notify('Copied.');});
+  bind('[data-use-message]',async button=>{
+    const wa=state.whatsapp;wa.drafts[wa.selectedId]=wa.messages.find(m=>m.messageId===button.dataset.useMessage)?.text || '';
+    await saveSmartPreference({draft:wa.drafts[wa.selectedId]});renderWhatsappPage();
+  });
+}
+
+function smartClientControls() {
+  const wa=state.whatsapp;const lead=selectedConversation()?.lead;
+  const stages=['NEW_LEAD','FIRST_CONTACT','INTERESTED','QUALIFYING','QUOTATION_SENT','FOLLOW_UP_1','FOLLOW_UP_2','FOLLOW_UP_3','ORDER_CONFIRMED','DESIGNING','APPROVAL','PRINTING','BINDING','DISPATCHED','CLOSED_WON','CLOSED_LOST','ON_HOLD'];
+  return `<div class="wa-smart-client"><button id="wa-human-takeover" type="button">${selectedConversation()?.humanTakeover ? 'Release human takeover' : 'Take over · pause automation'}</button><p>AI suggests replies. You review and send.</p>${lead ? `<label>Follow-up stage<select id="wa-lead-stage">${stages.map(value=>`<option ${lead.leadStatus===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Interest<select id="wa-lead-interest">${['UNKNOWN','LOW','MEDIUM','HIGH','VERY_HIGH'].map(value=>`<option ${lead.interestLevel===value?'selected':''}>${value}</option>`).join('')}</select></label><label>Products required<input id="wa-product-required" value="${attr((lead.productRequired || []).join(', '))}" placeholder="Separate products with commas"></label><button id="wa-save-lead" type="button">Save stage</button>`:''}<div class="wa-followup-shortcuts">${[[0,'In 1 hour'],[1,'Tomorrow'],[3,'In 3 days']].map(([days,label])=>`<button type="button" data-followup-days="${days}">${label}</button>`).join('')}</div>${(wa.overview?.followUps || []).filter(f=>f.status==='SCHEDULED').map(f=>`<div class="wa-due-item"><span>${esc(date(f.dueAt))} · ${esc(f.notes || 'Follow-up')}</span><button type="button" data-complete-followup="${attr(f.followUpId)}">Done</button></div>`).join('')}</div>`;
+}
+
+function smartDialog(title,body) {
+  document.querySelector('#wa-smart-dialog')?.remove();
+  const dialog=document.createElement('dialog');dialog.id='wa-smart-dialog';dialog.className='wa-smart-dialog';
+  dialog.innerHTML=`<header><h2>${esc(title)}</h2><button type="button" aria-label="Close dialog">×</button></header>${body}`;
+  dialog.querySelector('header button').onclick=()=>{dialog.close();dialog.remove();};
+  document.body.append(dialog);dialog.showModal();return dialog;
+}
+
+function openSmartSequence() {
+  const wa=state.whatsapp;const contact=wa.overview?.contact;if(!contact)return;
+  const dialog=smartDialog('Prepare a client sequence',`<p>Prepare up to 3 text or video steps for ${esc(contact.companyName || contact.contactPerson)}. The sequence is saved as a draft. Start it manually from Marketing after review.</p><label>Sequence name<input id="sequence-name" value="Client follow-up"></label>${[0,1,2].map(index=>`<fieldset><legend>Step ${index+1}${index?' · optional':''}</legend><label>Delay after previous step (minutes)<input type="number" min="0" max="1440" id="sequence-delay-${index}" value="${index?60:0}"></label><textarea id="sequence-text-${index}" maxlength="1024" rows="2" placeholder="Message for this step"></textarea><label>Optional video/image/document<input id="sequence-file-${index}" type="file" accept="video/*,image/*,.pdf"></label></fieldset>`).join('')}<p>Steps send only while the reply window is open. Client replies, STOP and human takeover pause/stop queued automation.</p><p id="sequence-error" role="alert"></p><button id="sequence-save" type="button">Save draft sequence</button>`);
+  dialog.querySelector('#sequence-save').onclick=async event=>{
+    const button=event.currentTarget;button.disabled=true;
+    try{
+      const name=dialog.querySelector('#sequence-name').value.trim();if(name.length<2)throw new Error('Enter a sequence name.');
+      const steps=[];
+      for(const index of [0,1,2]){
+        const messageLine=dialog.querySelector(`#sequence-text-${index}`).value.trim();const file=dialog.querySelector(`#sequence-file-${index}`).files[0];
+        if(!messageLine&&!file)continue;
+        if(messageLine.length<2)throw new Error(`Add a caption/message for step ${index+1}.`);
+        const delayMinutes=Number(dialog.querySelector(`#sequence-delay-${index}`).value);if(!Number.isInteger(delayMinutes)||delayMinutes<0||delayMinutes>1440)throw new Error('Delay must be 0–1440 minutes.');
+        const attachment=file?await uploadMarketingAsset(file):null;
+        steps.push({delayDays:0,delayMinutes,messageLine,messageType:file?messageTypeForFile(file):'TEXT',attachmentIds:attachment?[attachment.attachmentId]:[]});
+      }
+      if(!steps.length)throw new Error('Add at least one message.');
+      const {data:audience}=await api('/marketing/audiences',{method:'POST',body:{name,contactIds:[contact.contactId],relationshipType:contact.relationshipType==='EXISTING_CLIENT'?'EXISTING_CLIENT':'PROSPECT'}});
+      await api('/campaigns',{method:'POST',body:{name,audienceId:audience.audienceId,interestLabel:name,templateId:'interest_followup',deliveryMode:'OPEN_WINDOW_ONLY',trigger:'MANUAL',steps}});
+      dialog.close();dialog.remove();notify('Sequence draft saved. Review and start it in Marketing.');location.hash='#marketing';
+    }catch(error){dialog.querySelector('#sequence-error').textContent=error.message;button.disabled=false;}
+  };
+}
+
+function updateSmartReminders() {
+  const wa=state.whatsapp;
+  const item=wa.conversations.find(c=>!c.preferences?.muted && inboxMatches(c,{filter:'CLOSING'}) && Number(c.unreadCount)>0);
+  if(!item)return;
+  const key=`closing:${conversationId(item)}:${asDate(item.lastInboundAt)?.getTime()}`;
+  if(wa.reminderKeys.has(key))return;wa.reminderKeys.add(key);
+  notify(`Reply window closing soon: ${item.contact?.companyName || item.contact?.contactPerson || 'client'}`);
+}
+
+function smartSendKey(id, body) {
+  const wa=state.whatsapp;const signature=JSON.stringify(body);
+  if (wa.pendingSends[id]?.signature !== signature) wa.pendingSends[id]={signature,key:`${id}-${Date.now()}-${Math.random().toString(36).slice(2)}`};
+  return wa.pendingSends[id].key;
+}

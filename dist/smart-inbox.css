@@ -1,0 +1,50 @@
+.wa-smart-circles{display:flex;gap:7px;overflow:auto;padding:9px 0 3px;scrollbar-width:thin}
+.wa-smart-circles button{border:1px solid #dce7e3;background:#fff;color:#47645b;border-radius:20px;min-width:54px;flex-shrink:0;min-height:44px;padding:6px 10px;font-size:11px;cursor:pointer}
+.wa-smart-circles button.active,.wa-smart-actions button[aria-pressed=true]{background:#006b56;color:#fff;border-color:#006b56}
+.wa-smart-circles .wa-filter-count{display:block;font-weight:700;font-size:13px;margin:0}
+.wa-smart-sort{display:flex;justify-content:space-between;align-items:center;padding-top:9px;font-size:11px;color:#657c72}
+.wa-smart-sort select{border:0;background:transparent;color:#255e4f;font-size:12px;max-width:110px}
+.wa-smart-sort button{background:transparent;border:0;color:#08745f;cursor:pointer;padding:8px}
+.wa-smart-chat-tools{background:#f8fbf9;border-bottom:1px solid #dce7e3;padding:7px 12px;flex:none}
+.wa-smart-actions{display:flex;gap:5px;overflow-x:auto;padding-bottom:6px}
+.wa-smart-actions button,.wa-smart-client button,.wa-message-tools button,.wa-load-older{border:1px solid #d8e6df;background:#fff;color:#315e4f;border-radius:7px;font-size:11px;padding:7px 9px;white-space:nowrap;cursor:pointer}
+.wa-smart-actions button:disabled{opacity:.5;cursor:wait}
+.wa-chat-search{display:flex;align-items:center;gap:10px;font-size:11px;color:#677e75}
+.wa-chat-search input[type=search]{background:#fff;border:1px solid #e1eae6;border-radius:8px;padding:7px 10px;flex:1;min-width:0;font-size:12px}
+.wa-chat-search label{white-space:nowrap;display:flex;align-items:center;gap:4px}
+.wa-smart-hint{display:block;font-size:10px;font-style:normal;color:#49816c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:5px}
+.wa-smart-hint.urgent{color:#b46115;font-weight:600}
+.wa-smart-client{border-bottom:1px solid #e0eae5;padding-bottom:12px;display:grid;gap:8px}
+.wa-smart-client p{font-size:11px;line-height:1.5;color:#5d756a;margin:0}
+.wa-followup-shortcuts{display:flex;gap:4px;flex-wrap:wrap;margin-top:7px}
+.wa-due-item{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:7px;background:#fff8e8;font-size:11px;border-radius:7px}
+.wa-message-tools{display:flex;gap:4px;margin-top:5px;opacity:.7}
+.wa-message-tools button{font-size:10px;padding:3px 6px;background:transparent;border-color:transparent}
+.wa-message-tools button:hover{background:#fff;opacity:1}
+.wa-message-row[hidden]{display:none!important}
+.wa-load-older{display:block;margin:0 auto 15px}
+.wa-smart-dialog{border:1px solid #dce8e0;border-radius:16px;padding:24px;width:min(560px,92vw);max-height:85vh;overflow:auto;color:#204237;box-shadow:0 20px 80px #12382c33}
+.wa-smart-dialog::backdrop{background:#16342966}
+.wa-smart-dialog header{display:flex;justify-content:space-between;align-items:center;gap:16px}
+.wa-smart-dialog h2{font-size:21px;margin:0}
+.wa-smart-dialog p{font-size:13px;line-height:1.6}
+.wa-smart-dialog label{display:grid;gap:5px;font-size:12px;margin:8px 0}
+.wa-smart-dialog textarea,.wa-smart-dialog input:not([type=file]){box-sizing:border-box;width:100%;border:1px solid #cdded4;border-radius:8px;padding:10px;font:inherit}
+.wa-smart-dialog fieldset{border:1px solid #dce8e0;border-radius:10px;margin:16px 0;padding:14px}
+.wa-smart-dialog button{border:0;border-radius:8px;background:#006b56;color:white;padding:10px 15px;cursor:pointer}
+.wa-smart-dialog #sequence-error{color:#b0392a}
+.wa-smart-emoji{display:flex;gap:5px;padding:4px 0;overflow:auto}
+.wa-smart-emoji button{background:transparent;border:0;cursor:pointer;font-size:16px;padding:5px}
+.wa-smart-emoji #wa-save-quick-reply{font-size:11px;margin-left:auto;color:#006b56;white-space:nowrap}
+@media(max-width:700px){.wa-smart-chat-tools{padding:7px 9px}.wa-chat-search small{display:none}.wa-smart-actions button{min-height:34px}.wa-message-tools{opacity:1}.wa-smart-dialog{padding:16px}.wa-chat-panel{min-width:0}}
+.whatsapp-route .wa-chat-panel{grid-template-rows:auto auto minmax(0,1fr) auto}
+.wa-chat-panel>*{min-width:0;max-width:100%;box-sizing:border-box}
+.wa-smart-chat-tools,.wa-smart-actions,.wa-chat-search{min-width:0}
+.wa-smart-circles,.wa-smart-sort{padding-left:14px;padding-right:14px}
+.wa-compact-filters{min-width:0}
+.wa-compact-filters .wa-label-filter{min-width:0}
+.wa-owner-filters{flex-shrink:0;max-width:45%;overflow:auto}
+.wa-smart-dialog:focus{outline:none}
+
+.wa-inbox-panel{grid-template-columns:minmax(0,1fr)}
+.wa-inbox-tools{min-width:0}
