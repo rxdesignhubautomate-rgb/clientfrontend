@@ -506,3 +506,37 @@ img.wa-media, video.wa-media { object-fit: cover; }
   .campaign-main { flex-direction: column; }.campaign-actions { justify-content: flex-start; }.campaign-detail-meta { grid-template-columns: 1fr; }
   .step-fields { grid-template-columns: 1fr; }.step-fields .step-toggle { grid-column: auto; }
 }
+/* Simple marketing: counts, batches and a readable message preview. */
+.simple-marketing { max-width: 1080px; margin: 0 auto; }
+.simple-header-actions, .simple-preview-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.simple-marketing-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+.simple-marketing-metrics > * { background: white; border: 1px solid #dce7e6; border-radius: 16px; padding: 24px; }
+.simple-marketing-metrics strong { display: block; color: #123f37; font-size: 32px; margin-bottom: 6px; }
+.simple-count-note { font-size: 12px; margin: 12px 0 28px; }
+.simple-marketing .panel { margin-top: 20px; }
+.simple-marketing .campaign-list { gap: 14px; }
+.simple-batch-card { background: #fff; padding: 20px; border-radius: 14px; }
+.simple-batch-card .campaign-main strong { font-size: 16px; }
+.simple-batch-card .campaign-main small { margin-top: 6px; }
+.simple-batch-stats { display: flex; gap: 26px; margin-top: 18px; padding-top: 14px; border-top: 1px solid #edf1f3; color: #687c80; font-size: 12px; }
+.simple-batch-stats strong { color: #163a35; margin-right: 4px; }
+.simple-history summary { cursor: pointer; font-weight: 600; }
+.simple-history[open] .campaign-list { margin-top: 20px; }
+.simple-preview-modal { width: min(620px, calc(100vw - 32px)); max-height: 90vh; overflow-y: auto; }
+.simple-preview-content .field { margin: 16px 0; }
+.simple-preview-content .tiny-note { font-size: 12px; line-height: 1.5; text-align: left; margin: 12px 0; }
+.simple-message-stage { padding: 24px; background: #eeeae3; border-radius: 14px; margin: 18px 0; }
+.simple-message-bubble { max-width: 420px; margin: 0 auto; padding: 16px; border-radius: 2px 14px 14px 14px; background: #fff; box-shadow: 0 2px 6px #243b3510; }
+.simple-message-bubble > p { white-space: pre-wrap; color: #22342f; font-size: 14px; line-height: 1.65; margin: 10px 0; overflow-wrap: anywhere; }
+.simple-message-bubble > small { color: #718078; font-size: 11px; }
+.simple-preview-media video, .simple-preview-media img, .simple-preview-media audio { width: 100%; max-height: 300px; border-radius: 8px; background: #172e27; }
+.simple-preview-actions { border-top: 1px solid #e6ece9; padding-top: 18px; margin-top: 18px; }
+@media (max-width: 600px) {
+  .simple-marketing .section-head { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .simple-marketing-metrics { gap: 8px; }
+  .simple-marketing-metrics > * { padding: 16px 10px; }
+  .simple-marketing-metrics strong { font-size: 24px; }
+  .simple-marketing .campaign-main { align-items: flex-start; gap: 14px; }
+  .simple-batch-stats { gap: 14px; }
+  .simple-message-stage { padding: 12px; }
+}

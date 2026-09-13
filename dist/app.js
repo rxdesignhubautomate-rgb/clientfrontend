@@ -189,6 +189,28 @@ async function uploadUtilityTemplateAsset(file) {
 }
 
 async function fetchAttachmentBlob(attachmentId, { download = false } = {}) {
+  const wa=state.whatsapp;
+  if(download)return fetchAttachmentBlobUncached(attachmentId,{download:true});
+  const hit=wa.mediaCache.get(attachmentId);
+  if(hit && (hit.pending || hit.expiresAt>Date.now()))return hit.promise;
+  if(hit?.blob)wa.mediaCacheBytes-=hit.blob.size;
+  wa.mediaCache.delete(attachmentId);
+  const entry={pending:true,expiresAt:0};
+  entry.promise=fetchAttachmentBlobUncached(attachmentId).then(blob=>{
+    entry.pending=false;
+    if(state.whatsapp!==wa || wa.mediaCache.get(attachmentId)!==entry || blob.size>32*1024*1024){if(wa.mediaCache.get(attachmentId)===entry)wa.mediaCache.delete(attachmentId);return blob;}
+    entry.blob=blob;entry.expiresAt=Date.now()+60_000;wa.mediaCacheBytes+=blob.size;
+    for(const [key,item] of wa.mediaCache){
+      if(wa.mediaCacheBytes<=32*1024*1024 && wa.mediaCache.size<=40)break;
+      wa.mediaCache.delete(key);if(item.blob)wa.mediaCacheBytes-=item.blob.size;
+    }
+    return blob;
+  }).catch(error=>{wa.mediaCache.delete(attachmentId);throw error;});
+  wa.mediaCache.set(attachmentId,entry);
+  return entry.promise;
+}
+
+async function fetchAttachmentBlobUncached(attachmentId, { download = false } = {}) {
   if (!state.session) throw new Error("Authentication required");
   if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
   const suffix = download ? "?download=true" : "";
@@ -247,7 +269,7 @@ async function renderRoute() {
     return;
   }
   document.querySelectorAll("[data-route]").forEach((link) => link.classList.toggle("active", link.dataset.route === base || (base === "client" && link.dataset.route === "clients")));
-  page.innerHTML = '<div class="loading-card">Loading…</div>';
+  if (base !== "whatsapp" || !state.whatsapp.cacheHydrated) page.innerHTML = '<div class="loading-card">Loading…</div>';
   try {
     if (base === "whatsapp") await renderWhatsapp(route[1]);
     else if (base === "marketing") await renderMarketing();
@@ -291,75 +313,133 @@ async function renderDashboard() {
 async function renderWhatsapp(requestedConversationId) {
   pageTitle.textContent = "WhatsApp Inbox";
   const wa = state.whatsapp;
+  const navigation = ++wa.navigationVersion;
+  rememberWhatsappConversation();
   wa.mobileChatOpen = Boolean(requestedConversationId);
-  wa.cache ||= createChatCache([state.session?.email, state.session?.role, state.session?.clientScope, state.session?.userId].join(":"));
+  wa.cache ||= createChatCache([config.apiBaseUrl, state.session?.email, state.session?.role, state.session?.clientScope, state.session?.userId].join(":"));
+  const current = () => state.whatsapp === wa && navigation === wa.navigationVersion && location.hash.startsWith('#whatsapp');
+  // Paint the selected conversation from memory/disk before starting network work.
+  if (requestedConversationId && wa.selectedId !== requestedConversationId) {
+    discardVoiceRecording();
+    wa.selectedId = requestedConversationId;
+    wa.messages = []; wa.messagesConversationId=null; wa.overview = null; wa.overviewCachedAt = 0;
+  }
   await hydrateWhatsappCache(requestedConversationId);
-  if (wa.conversations.length) renderWhatsappPage();
-
-  const syncStartedAt = Date.now();
-  const checkpointIsFresh = wa.fullSyncedAt && wa.syncedAt && syncStartedAt - Number(wa.syncedAt) < WHATSAPP_FULL_SYNC_AFTER_MS;
-  const conversationQuery = checkpointIsFresh
-    ? `/conversations?limit=100&from=${encodeURIComponent(new Date(Math.max(0, Number(wa.syncedAt) - WHATSAPP_SYNC_OVERLAP_MS)).toISOString())}&sortBy=updatedAt&sortOrder=asc`
-    : "/conversations?limit=100&sortBy=updatedAt&sortOrder=asc";
-  let networkResults;
-  try {
-    networkResults = await Promise.all([
-      inboxAllPages(conversationQuery),
-      wa.templates.length ? Promise.resolve({ data: wa.templates }) : api("/whatsapp/utility-templates"),
-      wa.quickReplies.length ? Promise.resolve({ data: wa.quickReplies }) : optionalInboxApi("/whatsapp/quick-replies?limit=100", []),
-      wa.users.length ? Promise.resolve({ data: wa.users }) : optionalInboxApi("/users?limit=100", []),
-      wa.capabilities ? Promise.resolve({ data: wa.capabilities }) : optionalInboxApi("/whatsapp/capabilities", null)
-    ]);
-  } catch (error) {
-    if (!wa.conversations.length) throw error;
-    wa.syncState = "offline";
-    console.warn("Showing locally cached WhatsApp inbox while sync is unavailable", error);
-    updateWhatsappSyncBadge();
-    startWhatsappPolling();
+  if (!current()) return;
+  renderWhatsappPage();
+  ensureWhatsappMetadata();
+  let refreshedId=null,progressRequest;
+  const refreshSelected = async () => {
+    const id = wa.selectedId;
+    if (!id || !selectedConversation()) return;
+    refreshedId=id;
+    try {
+      await loadWhatsappConversation(id, {incremental:wa.messagesConversationId === id && wa.messages.length > 0});
+      if (current() && wa.selectedId === id) renderWhatsappPage();
+    } catch (error) {
+      if (current()) { wa.syncState='offline'; updateWhatsappSyncBadge(); notify(error.message, true); }
+    }
+  };
+  // Chat navigation never waits for the full inbox or template catalog.
+  if (wa.fullSyncedAt || wa.inboxRequest) {
+    await refreshSelected();
+    if (current()) startWhatsappPolling();
     return;
   }
-  const [conversationResult, templateResult, quickReplyResult, usersResult, capabilitiesResult] = networkResults;
-  const conversationUpdates = conversationResult.data.filter((item) => item.currentChannel === "WHATSAPP");
-  wa.conversations = sortWhatsappConversations(
-    checkpointIsFresh ? mergeById(wa.conversations, conversationUpdates, "conversationId") : conversationUpdates
-  );
-  for (const item of conversationUpdates) if (!wa.draftDirty.has(conversationId(item))) wa.drafts[conversationId(item)] = item.preferences?.draft || "";
-  wa.templates = templateResult.data;
-  wa.quickReplies = quickReplyResult.data || [];
-  wa.users = (usersResult.data || []).filter((item) => item.active !== false);
-  wa.capabilities = capabilitiesResult.data || null;
-  wa.syncState = "live";
-  wa.selectedId = requestedConversationId || wa.selectedId || conversationId(wa.conversations[0]);
-  if (wa.selectedId && !wa.conversations.some((item) => conversationId(item) === wa.selectedId)) {
-    wa.selectedId = conversationId(wa.conversations[0]);
+  const selectedRequest = refreshSelected();
+  wa.syncing = true;
+  wa.inboxRequest = (async () => {
+    try {
+      const result = await inboxAllPages('/conversations?limit=100&sortBy=updatedAt&sortOrder=asc', partial=>{
+        if(state.whatsapp !== wa) return;
+        wa.conversations=sortWhatsappConversations(mergeById(wa.conversations,partial.data.filter(item=>item.currentChannel==='WHATSAPP'),'conversationId'));
+        if(current() && !refreshedId){
+          if(!selectedConversation() && !requestedConversationId)wa.selectedId=conversationId(wa.conversations[0]);
+          if(selectedConversation()){renderWhatsappPage();progressRequest=refreshSelected();}
+        }
+        if(location.hash.startsWith('#whatsapp'))refreshWhatsappLiveDom();
+      });
+      if(state.whatsapp !== wa) return;
+      wa.conversations=sortWhatsappConversations(result.data.filter(item=>item.currentChannel==='WHATSAPP'));
+      for(const item of wa.conversations) if(!wa.draftDirty.has(conversationId(item)))wa.drafts[conversationId(item)]=item.preferences?.draft || '';
+      wa.syncedAt=asDate(result.meta?.syncStartedAt)?.getTime() || Date.now();
+      wa.fullSyncedAt=Date.now();wa.syncState='live';
+      const snapshot=wa.conversations.slice();
+      const checkpoint=snapshot.length<=10000?{syncedAt:wa.syncedAt,fullSyncedAt:wa.fullSyncedAt}:null;
+      queueWhatsappCache(wa, async()=>{
+        await wa.cache?.replaceConversations?.(snapshot);
+        // Persist the cutoff only when the cache retains a complete inbox.
+        await wa.cache?.setMeta?.('completeInbox',checkpoint);
+      });
+
+    } catch(error) {
+      if(state.whatsapp === wa){wa.syncState='offline';if(location.hash.startsWith('#whatsapp')){updateWhatsappSyncBadge();notify(error.message,true);}}
+    } finally {
+      wa.inboxRequest=null;wa.syncing=false;
+      if(state.whatsapp===wa)startWhatsappPolling();
+    }
+  })();
+  await Promise.all([wa.inboxRequest,selectedRequest]);
+  if(progressRequest)await progressRequest;
+  if(!current())return;
+  if(!selectedConversation()) {
+    wa.selectedId=conversationId(wa.conversations[0]);wa.messages=[];wa.overview=null;wa.messagesConversationId=null;
   }
-  if (wa.selectedId) {
-    const useIncrementalMessages = wa.messagesConversationId === wa.selectedId && wa.messages.length > 0;
-    const incoming = await loadWhatsappConversation(wa.selectedId, { incremental: useIncrementalMessages });
-    await refreshChangedMessageMarkers(conversationUpdates, new Set(incoming.map((item) => item.messageId || item.id)));
-  }
-  wa.syncedAt = asDate(conversationResult.meta?.syncStartedAt)?.getTime() || syncStartedAt;
-  if (!checkpointIsFresh) { wa.fullSyncedAt = syncStartedAt; await chatCacheCall(wa.cache, "replaceConversations", wa.conversations); }
-  await Promise.all([
-    chatCacheCall(wa.cache, "putConversations", wa.conversations),
-    chatCacheCall(wa.cache, "setMeta", "conversationSyncAt", wa.syncedAt)
-  ]);
-  renderWhatsappPage();
-  startWhatsappPolling();
+  if(wa.selectedId !== refreshedId)await refreshSelected();
+  if(current())renderWhatsappPage();
+}
+
+function ensureWhatsappMetadata() {
+  const wa=state.whatsapp;
+  if(wa.metadataRequest || Date.now()-(wa.metadataAt||0)<5*60_000)return wa.metadataRequest;
+  wa.metadataRequest=Promise.all([
+    optionalInboxApi('/whatsapp/utility-templates',wa.templates),
+    optionalInboxApi('/whatsapp/quick-replies?limit=100',wa.quickReplies),
+    optionalInboxApi('/users?limit=100',wa.users),
+    optionalInboxApi('/whatsapp/capabilities',wa.capabilities)
+  ]).then(([templates,quickReplies,users,capabilities])=>{
+    if(state.whatsapp!==wa)return;
+    wa.templates=templates.data;wa.quickReplies=quickReplies.data;wa.users=users.data.filter(item=>item.active!==false);wa.capabilities=capabilities.data;
+    wa.metadataAt=Date.now();
+    const metadata={templates:wa.templates,quickReplies:wa.quickReplies,users:wa.users,capabilities:wa.capabilities};
+    queueWhatsappCache(wa,()=>chatCacheCall(wa.cache,'setMeta','inboxMetadata',metadata));
+    if(location.hash.startsWith('#whatsapp'))renderWhatsappPage();
+  }).catch(error=>console.warn('Inbox metadata unavailable',error)).finally(()=>{wa.metadataRequest=null;});
+  return wa.metadataRequest;
+}
+
+function rememberWhatsappConversation() {
+  const wa=state.whatsapp,id=wa.messagesConversationId;
+  if(!id || wa.selectedId!==id)return;
+  const messages=wa.messages.slice(-500);
+  const olderCursor=wa.messages.length>500?btoa(JSON.stringify({id:messages[0].messageId || messages[0].id})).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_'):wa.olderCursor;
+  wa.recentChats.delete(id);
+  wa.recentChats.set(id,{messages,overview:wa.overview,overviewCachedAt:wa.overviewCachedAt,olderCursor});
+  while(wa.recentChats.size>30)wa.recentChats.delete(wa.recentChats.keys().next().value);
+}
+
+function queueWhatsappCache(wa,write) {
+  wa.cacheWrites=(wa.cacheWrites || Promise.resolve()).then(()=>state.whatsapp===wa?write():undefined).catch(error=>console.warn('Chat cache write failed',error));
 }
 
 async function hydrateWhatsappCache(requestedConversationId) {
   const wa = state.whatsapp;
+  const navigation = wa.navigationVersion;
   if (!wa.cacheHydrated) {
-    const [cachedConversations, cachedSyncAt] = await Promise.all([
+    const [cachedConversations, cachedSyncAt, metadata] = await Promise.all([
       chatCacheCall(wa.cache, "getConversations"),
-      chatCacheCall(wa.cache, "getMeta", "conversationSyncAt")
+      chatCacheCall(wa.cache, "getMeta", "completeInbox"),
+      chatCacheCall(wa.cache, "getMeta", "inboxMetadata")
     ]);
+    if (state.whatsapp !== wa || wa.navigationVersion !== navigation) return;
+    if(metadata){wa.templates=metadata.templates||[];wa.quickReplies=metadata.quickReplies||[];wa.users=metadata.users||[];wa.capabilities=metadata.capabilities||null;}
     if (cachedConversations?.length) {
       wa.conversations = sortWhatsappConversations(mergeById(wa.conversations, cachedConversations, "conversationId"));
       wa.syncState = "cached";
     }
-    if (cachedSyncAt) wa.syncedAt = Number(cachedSyncAt) || asDate(cachedSyncAt)?.getTime() || null;
+    if(cachedConversations?.length && cachedSyncAt?.fullSyncedAt && Date.now()-cachedSyncAt.fullSyncedAt<15*60_000) {
+      wa.syncedAt=cachedSyncAt.syncedAt;wa.fullSyncedAt=cachedSyncAt.fullSyncedAt;
+    }
     wa.cacheHydrated = true;
   }
   const selectedId = requestedConversationId || wa.selectedId || conversationId(wa.conversations[0]);
@@ -370,14 +450,20 @@ async function hydrateWhatsappCache(requestedConversationId) {
 
 async function loadCachedWhatsappConversation(id) {
   const wa = state.whatsapp;
+  const navigation = wa.navigationVersion;
   const selected = wa.conversations.find((item) => conversationId(item) === id);
   if (!selected) return;
+  const memory=wa.recentChats.get(id);
+  if(memory){
+    wa.messages=memory.messages;wa.overview=memory.overview;wa.overviewCachedAt=memory.overviewCachedAt;
+    wa.olderCursor=memory.olderCursor;wa.messagesConversationId=id;selectDefaultWhatsappOrder();return;
+  }
   const [messages, cachedOverview, localDraft] = await Promise.all([
     chatCacheCall(wa.cache, "getMessages", id),
     chatCacheCall(wa.cache, "getOverview", selected.contactId),
     chatCacheCall(wa.cache, "getMeta", `draft:${id}`)
   ]);
-  if (wa.selectedId !== id) return;
+  if (state.whatsapp !== wa || wa.navigationVersion !== navigation || wa.selectedId !== id) return;
   wa.messages = messages || [];
   wa.olderCursor = wa.messages.length ? btoa(JSON.stringify({id:wa.messages[0].messageId || wa.messages[0].id})).replace(/=/g,'').replace(/\+/g,'-').replace(/\//g,'_') : null;
   if ((typeof localDraft === "string" || localDraft?.pending) && !Object.hasOwn(wa.drafts,id)) { wa.drafts[id] = typeof localDraft === "string" ? localDraft : localDraft.text; wa.draftDirty.add(id); }
@@ -399,6 +485,7 @@ async function optionalInboxApi(path, fallback) {
 
 async function loadWhatsappConversation(id, { incremental = false } = {}) {
   const wa = state.whatsapp;
+  const navigation=wa.navigationVersion;
   const selected = wa.conversations.find((item) => conversationId(item) === id);
   if (!selected) return [];
   const sameConversation = wa.messagesConversationId === id;
@@ -419,7 +506,7 @@ async function loadWhatsappConversation(id, { incremental = false } = {}) {
     requests.push(api(`/contacts/${encodeURIComponent(selected.contactId)}/overview`));
   }
   const [messageResult, overviewResult] = await Promise.all(requests);
-  if (wa.selectedId !== id) return [];
+  if (state.whatsapp !== wa || wa.navigationVersion !== navigation || wa.selectedId !== id) return [];
   if (!hasBaseline) wa.olderCursor = messageResult.pagination?.hasMore ? messageResult.pagination.nextCursor : null;
   const incoming = hasBaseline ? messageResult.data : [...messageResult.data].reverse();
   wa.messages = (hasBaseline ? mergeById(wa.messages, incoming, "messageId") : incoming)
@@ -433,10 +520,12 @@ async function loadWhatsappConversation(id, { incremental = false } = {}) {
   selectDefaultWhatsappOrder();
   syncWhatsappComposerMode({ conversationChanged: !sameConversation });
   prefillUtilityValues(false);
-  await Promise.all([
+  const overview=wa.overview;
+  queueWhatsappCache(wa,()=>Promise.all([
     chatCacheCall(wa.cache, "putMessages", incoming),
-    overviewResult ? chatCacheCall(wa.cache, "putOverview", selected.contactId, wa.overview) : Promise.resolve()
-  ]);
+    overviewResult ? chatCacheCall(wa.cache, "putOverview", selected.contactId, overview) : Promise.resolve()
+  ]));
+  rememberWhatsappConversation();
   return incoming;
 }
 
@@ -459,6 +548,7 @@ function syncWhatsappComposerMode({ conversationChanged = false } = {}) {
 
 function renderWhatsappPage(draftText) {
   const wa = state.whatsapp;
+  const counts = inboxCounts(wa.conversations,wa);
   const selected = selectedConversation();
   draftText ??= wa.drafts[wa.selectedId] ?? selected?.preferences?.draft ?? "";
   const syncIndicator = whatsappSyncIndicator();
@@ -469,25 +559,30 @@ function renderWhatsappPage(draftText) {
       <aside class="wa-inbox-panel" aria-label="Conversations">
         <div class="wa-inbox-tools">
           <header class="wa-inbox-heading">
-            <div><h1>Chats</h1><span id="wa-sync-state" class="wa-api-state ${syncIndicator.connected ? "connected" : "disconnected"}">${esc(syncIndicator.label)}</span></div>
+            <div><h1>WhatsApp</h1><span id="wa-sync-state" class="wa-api-state ${syncIndicator.connected ? "connected" : "disconnected"}">${esc(syncIndicator.label)}</span></div>
             <div class="wa-header-actions">
+              <button id="wa-toggle-filters" class="wa-icon-button" type="button" aria-label="Toggle inbox filters" aria-expanded="${!referencePreferences().filtersCollapsed}">⌃</button>
+              <button id="wa-reference-refresh" class="wa-icon-button" type="button" aria-label="Sync chats">${uiIcon("refresh")}</button>
+              <button id="wa-reference-settings" class="wa-icon-button" type="button" aria-label="Chat settings">⚙</button>
               <button class="wa-icon-button wa-mobile-menu" id="wa-menu-button" type="button" title="Open navigation" aria-label="Open navigation">${uiIcon("menu")}</button>
               <button class="wa-icon-button" id="wa-enable-alerts" type="button" title="Enable desktop alerts" aria-label="Enable desktop alerts">${uiIcon("bell")}</button>
-              <a class="wa-icon-button" href="#clients" title="Start client chat" aria-label="Start client chat">${uiIcon("plus")}</a>
+              <button class="wa-icon-button" id="wa-reference-new-chat" type="button" title="Start client chat" aria-label="Start client chat">${uiIcon("plus")}</button>
             </div>
           </header>
-          <label class="wa-search-wrap">${uiIcon("search")}<span class="sr-only">Search conversations</span><input id="wa-search" class="wa-search" type="search" placeholder="Search or start a new chat" value="${attr(wa.search)}" /></label>
-          <div class="wa-filters" aria-label="Filter conversations">${waFilterButton("ALL", "All")}${waFilterButton("UNREAD", "Unread")}${waFilterButton("READ", "Read")}${waFilterButton("WINDOW", "Reply open")}${waFilterButton("IMPORTANT", "Favourites")}</div>
+          <div id="wa-reference-filters" ${referencePreferences().filtersCollapsed ? "hidden" : ""}><label class="wa-search-wrap">${uiIcon("search")}<span class="sr-only">Search conversations</span><input id="wa-search" class="wa-search" type="search" placeholder="Search or start a new chat" value="${attr(wa.search)}" /></label>
+          <div class="wa-filters" aria-label="Filter conversations">${waFilterButton("ALL", "All", counts)}${waFilterButton("UNREAD", "Unread", counts)}${waFilterButton("READ", "Read", counts)}${waFilterButton("WINDOW", "Open", counts)}${waFilterButton("MARKETING", "Marketing replies", counts)}${waFilterButton("HOT", "Hot leads", counts)}${waFilterButton("IMPORTANT", "Favourites", counts)}</div>
           ${waQuickFilters()}
-          <div class="wa-smart-circles" aria-label="Priority filters">${[['DUE','Due'],['CLOSING','Closing'],['HOT','Hot'],['QUOTATION','Quote'],['FOLLOWUP','Follow-up'],['ARCHIVED','Archived']].map(([key,label]) => waFilterButton(key,label)).join('')}</div>
+          <details class="ref-more-filters"><summary>More filters</summary><div class="wa-smart-circles" aria-label="Priority filters">${[['DUE','Due'],['CLOSING','Closing'],['HOT','Hot'],['QUOTATION','Quote'],['FOLLOWUP','Follow-up'],['ARCHIVED','Archived']].map(([key,label]) => waFilterButton(key,label, counts)).join('')}</div>
           <div class="wa-smart-sort"><label>Sort <select id="wa-smart-sort"><option value="RECENT" ${wa.sort === 'RECENT' ? 'selected' : ''}>Recent</option><option value="PRIORITY" ${wa.sort === 'PRIORITY' ? 'selected' : ''}>Connect next</option></select></label><button id="wa-smart-refresh" type="button">Refresh</button></div>
-          <div class="wa-inbox-counts" id="wa-inbox-counts" aria-live="polite">${waInboxSummary()}</div>
+          </details><div class="wa-inbox-counts" id="wa-inbox-counts" aria-live="polite">${waInboxSummary(counts)}</div></div>
         </div>
         <div class="wa-conversation-list" id="wa-conversation-list">${waConversationList()}</div>
       </aside>
+      <div id="wa-reference-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-label="Resize conversation list"></div>
       ${selected ? whatsappChatMarkup(selected, draftText) : `<section class="wa-no-chat"><div class="wa-empty-icon">${uiIcon("chat")}</div><h3>No WhatsApp conversation yet</h3><p>Open a client profile and choose <strong>Open WhatsApp</strong>. Choose a relevant approved template when the reply window is closed.</p><a class="button button-primary" href="#clients">Choose a client</a></section>`}
     </div>`;
   bindWhatsappEvents();
+  bindReferenceWhatsapp();
   if (selected) {
     requestAnimationFrame(() => {
       restoreWhatsappViewport(viewport, conversationId(selected));
@@ -510,12 +605,13 @@ function whatsappChatMarkup(conversation, draftText) {
         <div class="wa-chat-actions">
           <span class="wa-window ${windowStatus.open ? "open" : "closed"}">${windowStatus.open ? `Free reply · ${esc(windowStatus.remaining)}` : "Approved template required"}</span>
           ${contact.primaryPhone ? `<a class="wa-icon-button" href="tel:+${attr(contact.primaryPhone)}" title="Call customer" aria-label="Call customer">${uiIcon("phone")}</a>` : ""}
+          <button id="wa-reference-search" class="wa-icon-button" type="button" aria-label="Search this conversation">${uiIcon("search")}</button>
           <button class="wa-icon-button wa-details-button" id="wa-toggle-client-panel" type="button" title="Client workspace" aria-label="Client workspace" aria-expanded="${wa.clientPanelOpen}" aria-controls="wa-client-workspace">${uiIcon("info")}</button>
           <button class="wa-icon-button ${important ? "important" : ""}" id="wa-toggle-important" title="${important ? "Remove Important" : "Mark Important"}">${uiIcon("star")}</button>
           <button class="wa-icon-button" id="wa-toggle-status" title="${conversation.status === "CLOSED" ? "Reopen" : "Close"} conversation">${uiIcon(conversation.status === "CLOSED" ? "refresh" : "check")}</button>
         </div>
       </header>
-      ${smartChatToolbar()}
+      <details class="ref-chat-tools" ${wa.messageSearch || wa.starredOnly ? "open" : ""}><summary>Chat tools</summary>${smartChatToolbar()}</details>
       <div class="wa-message-list" id="wa-message-list">
         <div class="wa-day-chip">Conversation history</div>${wa.olderCursor ? '<button class="wa-load-older" id="wa-load-older" type="button">Load earlier messages</button>' : ""}
         ${wa.messages.length ? wa.messages.map(waMessage).join("") : '<div class="wa-chat-empty">No messages yet. Use a Utility template to start this conversation.</div>'}
@@ -533,26 +629,25 @@ function waComposer(windowStatus, draftText) {
   const useText = wa.mode === "TEXT" && windowStatus.open;
   const quoted = wa.messages.find((item) => item.messageId === wa.replyToMessageId);
   const approvedTemplateAvailable = visibleTemplates.length > 0;
-  return `<div class="wa-composer">
-    <div class="wa-smart-emoji">${["😊","👍","🙏","✅","📦","🎨"].map(emoji=>`<button type="button" data-insert-emoji="${emoji}" aria-label="Insert ${emoji}">${emoji}</button>`).join("")}<button id="wa-save-quick-reply" type="button">Save quick reply</button></div>
-    <div class="wa-compose-tabs">
-      <button class="${useText ? "active" : ""}" data-wa-mode="TEXT" ${windowStatus.open ? "" : "disabled"}>Reply</button>
-      <button class="${!useText ? "active" : ""}" data-wa-mode="TEMPLATE">Utility update</button>
-      <small>${windowStatus.open ? "Customer replied within 24 hours" : "Normal reply is locked outside 24 hours"}</small>
-    </div>
+  return `<div class="wa-composer reference-composer">
     ${useText ? `<form id="wa-composer-form" class="wa-text-composer">
-        <div class="wa-composer-toolbar">
-          <select id="wa-quick-reply"><option value="">Quick reply…</option>${wa.quickReplies.map((item) => `<option value="${attr(item.quickReplyId)}">${esc(item.shortcut)} · ${esc(item.title)}</option>`).join("")}<option value="__CREATE__">+ Add custom quick reply</option></select>
-          <label class="wa-tool-button" title="Attach image, video, audio or document">${uiIcon("clip")}<span class="sr-only">Attach a file</span><input id="wa-attachment-input" class="sr-only" type="file" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf" /></label>
-          <button class="wa-tool-button ${wa.recording ? "recording" : ""}" id="wa-record-audio" type="button" title="Record voice note" aria-label="${wa.recording ? "Stop recording" : "Record voice note"}">${wa.recording ? "■ Stop" : uiIcon("mic")}</button>
-          <button class="wa-tool-button" id="wa-share-location" type="button" title="Share current location" aria-label="Share current location">${uiIcon("pin")}</button>
-          <button class="wa-tool-button" id="wa-share-contact" type="button" title="Share a contact card" aria-label="Share a contact card">${uiIcon("people")}</button>
-          <button class="wa-tool-button" id="wa-interactive-buttons" type="button" title="Send quick-reply buttons" aria-label="Send quick-reply buttons">${uiIcon("bolt")}</button>
-          <button class="wa-tool-button" id="wa-add-internal-note" type="button" title="Add an internal note" aria-label="Add an internal note">${uiIcon("note")}</button>
-        </div>
-        ${quoted ? `<div class="wa-replying"><div><small>Replying to ${quoted.direction === "INBOUND" ? "customer" : "team"}</small><p>${esc(quoted.text || `[${pretty(quoted.type)}]`)}</p></div><button id="wa-cancel-reply" type="button">×</button></div>` : ""}
-        <div class="wa-input-row"><textarea id="wa-message-input" rows="1" maxlength="4096" placeholder="Type a message or / shortcut…">${esc(draftText)}</textarea><button class="wa-send-button" type="submit" title="Send message" aria-label="Send message">${uiIcon("send")}</button></div>
-      </form>` : `
+      ${quoted ? `<div class="wa-replying"><div><small>Replying to ${quoted.direction === "INBOUND" ? "customer" : "team"}</small><p>${esc(quoted.text || pretty(quoted.type))}</p></div><button id="wa-cancel-reply" type="button">×</button></div>` : ""}
+      <div class="wa-input-row">
+        <details class="ref-attachment-menu"><summary aria-label="Attach a file">${uiIcon("plus")}</summary><div class="ref-attachment-options">
+          <label class="wa-tool-button">${uiIcon("clip")} Attach files<input id="wa-attachment-input" class="sr-only" type="file" multiple accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf" /></label>
+          <button class="wa-tool-button" id="wa-share-location" type="button">${uiIcon("pin")} Share location</button>
+          <button class="wa-tool-button" id="wa-share-contact" type="button">${uiIcon("people")} Share contact</button>
+          <button class="wa-tool-button" id="wa-interactive-buttons" type="button">${uiIcon("bolt")} Reply buttons</button>
+          <button class="wa-tool-button" id="wa-add-internal-note" type="button">${uiIcon("note")} Internal note</button>
+        </div></details>
+        <button class="wa-tool-button" id="wa-reference-emoji" type="button" aria-label="Choose emoji">☺</button>
+        <button class="wa-tool-button" id="wa-reference-photos" type="button" aria-label="Attach photos and videos">${uiIcon("image")}</button>
+        <textarea id="wa-message-input" rows="1" maxlength="4096" placeholder="Type a message or / shortcut…">${esc(draftText)}</textarea>
+        <button class="wa-tool-button ${wa.recording ? "recording" : ""}" id="wa-record-audio" type="button" aria-label="${wa.recording ? "Stop recording" : "Record voice note"}">${wa.recording ? "■" : uiIcon("mic")}</button>
+        <button class="wa-send-button" type="submit" title="Send message" aria-label="Send message">${uiIcon("send")}</button>
+      </div>
+      <div class="ref-composer-footer"><select id="wa-quick-reply" aria-label="Quick replies"><option value="">Quick replies</option>${wa.quickReplies.map(item => `<option value="${attr(item.quickReplyId)}">${esc(item.shortcut)} · ${esc(item.title)}</option>`).join("")}<option value="__CREATE__">+ Add custom quick reply</option></select><button id="wa-save-quick-reply" type="button">Save quick reply</button><button data-wa-mode="TEMPLATE" type="button">Templates</button><button id="wa-reference-suggest" type="button">Suggest reply</button></div>
+    </form>` : `<div class="wa-compose-tabs"><button data-wa-mode="TEXT" ${windowStatus.open ? "" : "disabled"}>Reply</button><button data-wa-mode="TEMPLATE" class="active">Approved template</button><small>${windowStatus.open ? "Customer replied within 24 hours" : "Normal reply is locked outside 24 hours"}</small></div>
       <form id="wa-composer-form" class="wa-template-composer">
         <div class="wa-template-row"><label>Approved Utility template<select id="wa-template-select" ${approvedTemplateAvailable ? "" : "disabled"}>${visibleTemplates.map((item) => `<option value="${attr(item.id)}" ${item.id === template?.id ? "selected" : ""}>${esc(item.label)} · ${esc(pretty(item.approvalStatus || "Approved"))}</option>`).join("")}</select></label>
           <label>Related order<select id="wa-template-order"><option value="">Select order</option>${(wa.overview?.orders || []).map((order) => `<option value="${attr(order.orderId)}" ${order.orderId === wa.selectedOrderId ? "selected" : ""}>${esc(orderReference(order))} · ${esc(pretty(order.status))}</option>`).join("")}</select></label></div>
@@ -605,12 +700,12 @@ function waConversationList() {
   const wa = state.whatsapp;
   const items = smartSort(wa.conversations.filter((item) => inboxMatches(item, wa)));
   if (!items.length) return '<div class="wa-no-results">No matching conversations.</div>';
-  return items.map((item) => {
+  return items.slice(0,wa.listLimit).map((item) => {
     const contact = item.contact || {};
     const name = contact.companyName || contact.contactPerson || contact.primaryPhone || "WhatsApp client";
     const active = conversationId(item) === wa.selectedId;
-    return `<button class="wa-conversation ${active ? "active" : ""} ${Number(item.unreadCount || 0) > 0 ? "unread" : ""}" data-conversation-id="${attr(conversationId(item))}" aria-label="Open chat with ${attr(name)}" ${active ? 'aria-current="true"' : ""}><span class="wa-avatar" style="${avatarStyle(name)}">${esc(initials(name))}</span><span class="wa-conversation-copy"><span><strong>${esc(name)}</strong><time>${esc(shortTime(item.lastMessageAt))}</time></span><small>${item.preferences?.pinned ? "📌 " : ""}${item.preferences?.muted ? "🔕 " : ""}${esc(item.lastMessagePreview || "No messages yet")}</small>${smartConversationHint(item)}</span>${Number(item.unreadCount || 0) ? `<b>${esc(item.unreadCount)}</b>` : ""}</button>`;
-  }).join("");
+    return `<button class="wa-conversation ${active ? "active" : ""} ${Number(item.unreadCount || 0) > 0 ? "unread" : ""}" data-conversation-id="${attr(conversationId(item))}" aria-label="Open chat with ${attr(name)}" ${active ? 'aria-current="true"' : ""}><span class="wa-avatar" style="${avatarStyle(name)}">${esc(initials(name))}</span><span class="wa-conversation-copy"><span><strong>${esc(name)}</strong><time>${esc(shortTime(item.lastMessageAt))}</time>${referenceReplyTimer(item)}</span><small>${item.preferences?.pinned ? "📌 " : ""}${item.preferences?.muted ? "🔕 " : ""}${esc(item.lastMessagePreview || "No messages yet")}</small>${referenceChatHint(item)}</span>${Number(item.unreadCount || 0) ? `<b>${esc(item.unreadCount)}</b>` : ""}</button>`;
+  }).join("") + (items.length>wa.listLimit ? `<button id="wa-load-more-chats" class="wa-load-older" type="button">Show more chats (${formatCount(items.length-wa.listLimit)} remaining)</button>` : "");
 }
 
 function waMessage(message) {
@@ -699,6 +794,7 @@ function bindWhatsappEvents() {
   bindSmartInbox();
   document.querySelector("#wa-search")?.addEventListener("input", (event) => {
     state.whatsapp.search = event.target.value;
+    state.whatsapp.listLimit=100;
     refreshWhatsappLiveDom();
   });
   document.querySelector(".wa-inbox-tools")?.addEventListener("click", (event) => {
@@ -960,6 +1056,7 @@ function releaseMediaObjectUrls() {
 }
 
 function bindConversationRows() {
+  document.querySelector('#wa-load-more-chats')?.addEventListener('click',()=>{state.whatsapp.listLimit+=100;refreshWhatsappLiveDom();});
   document.querySelectorAll("[data-conversation-id]").forEach((button) => button.addEventListener("click", () => {
     saveSmartDraft();
     state.whatsapp.messageSearch = ""; state.whatsapp.starredOnly = false;
@@ -1110,25 +1207,25 @@ async function createCustomQuickReply() {
 async function sendSelectedAttachment(event) {
   const files = Array.from(event.target.files || []).slice(0, 10);
   event.target.value = "";
-  const caption = document.querySelector("#wa-message-input")?.value.trim() || "";
-  const id = state.whatsapp.selectedId;
-  for (const [index, file] of files.entries()) { if (state.whatsapp.selectedId !== id) {notify("Chat changed. Remaining attachments were not sent.");break;} await sendAttachmentFile(file, index === 0 ? caption : ""); }
+  event.target.accept = "image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.rtf";
+  previewReferenceAttachments(files, document.querySelector("#wa-message-input")?.value.trim() || "");
 }
 
 async function sendAttachmentFile(file, caption = "") {
   const wa = state.whatsapp;
   const sendingId = wa.selectedId;
-  const sendingOrderId = wa.selectedOrderId;
+  const replyToMessageId = wa.replyToMessageId || null;
   const conversation = selectedConversation();
-  if (!conversation || !wa.overview?.contact?.contactId) return;
+  if (!conversation || !wa.overview?.contact?.contactId) return false;
   if (!whatsappWindow().open) {
     notify("Media can be sent as a normal reply only while the 24-hour service window is open.", true);
-    return;
+    return false;
   }
   const kind = messageTypeForFile(file);
   notify(`Uploading ${file.name || pretty(kind)}…`);
   try {
     const attachment = await uploadAttachment(file, wa.overview.contact.contactId, sendingId);
+    if (state.whatsapp !== wa || !state.session) return false;
     const { data: queued } = await api(`/conversations/${encodeURIComponent(sendingId)}/messages`, {
       method: "POST",
       headers: { "idempotency-key": `${sendingId}-media-${Date.now()}-${Math.random().toString(36).slice(2)}` },
@@ -1136,17 +1233,19 @@ async function sendAttachmentFile(file, caption = "") {
         type: kind,
         text: kind === "AUDIO" ? "" : caption,
         attachmentIds: [attachment.attachmentId],
-        replyToMessageId: wa.replyToMessageId || null
+        replyToMessageId
       }
     });
     if (!queued?.queued && !queued?.sent) throw new Error(policyFailureMessage(queued?.reason));
-    if (sendingId !== wa.selectedId) { notify("Attachment queued in the original conversation."); return; }
+    if (sendingId !== wa.selectedId) { notify("Attachment queued in the original conversation."); return true; }
     wa.replyToMessageId = null;
     await loadWhatsappConversation(sendingId, { incremental: true });
     renderWhatsappPage();
     notify(`${pretty(kind)} queued for WhatsApp.`);
+    return true;
   } catch (error) {
     notify(error.message, true);
+    return false;
   }
 }
 
@@ -1160,6 +1259,8 @@ function messageTypeForFile(file) {
 
 async function toggleVoiceRecording() {
   const wa = state.whatsapp;
+  const recordingConversationId = wa.selectedId;
+  if (wa.voiceBusy) { notify('Please wait for the voice preview.'); return; }
   if (wa.recording && wa.mediaRecorder) {
     wa.mediaRecorder.stop();
     return;
@@ -1172,35 +1273,47 @@ async function toggleVoiceRecording() {
     notify("Voice notes can be sent only while the 24-hour service window is open.", true);
     return;
   }
+  let stream;
+  wa.voiceBusy = true;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1 } });
+    if (state.whatsapp !== wa || wa.selectedId !== recordingConversationId || !state.session || !location.hash.startsWith('#whatsapp')) { stream.getTracks().forEach(track => track.stop()); return; }
     const recorder = new MediaRecorder(stream);
     const chunks = [];
     recorder.addEventListener("dataavailable", (event) => {
       if (event.data?.size) chunks.push(event.data);
     });
     recorder.addEventListener("stop", async () => {
+      clearTimeout(wa.recordingTimeout);
       stream.getTracks().forEach((track) => track.stop());
       const mimeType = recorder.mimeType || "audio/webm";
       const file = new File(chunks, `voice-note-${Date.now()}.webm`, { type: mimeType });
-      const discard = wa.discardRecording || !state.session || !location.hash.startsWith("#whatsapp");
+      const discard = wa.discardRecording || wa.selectedId !== recordingConversationId || !state.session || !location.hash.startsWith("#whatsapp");
       wa.recording = false;
       wa.discardRecording = false;
       wa.mediaRecorder = null;
       wa.mediaStream = null;
       if (discard) return;
       renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
-      await sendAttachmentFile(file);
+      wa.voiceBusy = true;
+      try {
+        notify('Preparing voice preview…');
+        const encoded = await encodeReferenceVoice(file);
+        if (state.whatsapp === wa && wa.selectedId === recordingConversationId && state.session && location.hash.startsWith('#whatsapp')) previewReferenceAttachments([encoded]);
+      } catch (error) { notify(`Voice encoding failed: ${error.message}. You can attach an audio file instead.`, true); }
+      finally { wa.voiceBusy = false; }
     });
     recorder.start();
+    wa.recordingTimeout = setTimeout(() => { if (recorder.state !== 'inactive') recorder.stop(); }, 120000);
     wa.recording = true;
     wa.mediaRecorder = recorder;
     wa.mediaStream = stream;
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
     notify("Recording voice note… click Stop when finished.");
   } catch (error) {
+    stream?.getTracks().forEach(track => track.stop());
     notify(error.message || "Microphone permission was not granted.", true);
-  }
+  } finally { wa.voiceBusy = false; }
 }
 
 function discardVoiceRecording() {
@@ -1547,12 +1660,17 @@ async function pollWhatsapp() {
     const from = new Date(Math.max(0, Number(wa.syncedAt || syncStartedAt) - WHATSAPP_SYNC_OVERLAP_MS)).toISOString();
     const full = !wa.fullSyncedAt || syncStartedAt - wa.fullSyncedAt > 15 * 60_000;
     const result = await inboxAllPages(full ? "/conversations?limit=100&sortBy=updatedAt&sortOrder=asc" : `/conversations?limit=100&from=${encodeURIComponent(from)}&sortBy=updatedAt&sortOrder=asc`);
+    if (state.whatsapp !== wa) return;
     const whatsappUpdates = result.data.filter((item) => item.currentChannel === "WHATSAPP");
     for (const item of whatsappUpdates) if (!wa.draftDirty.has(conversationId(item))) wa.drafts[conversationId(item)] = item.preferences?.draft || "";
     const selectedChanged = whatsappUpdates.some((item) => conversationId(item) === wa.selectedId);
     const newlyUnread = whatsappUpdates.filter((item) => Number(item.unreadCount || 0) > Number(previousUnread.get(conversationId(item)) || 0));
     wa.conversations = sortWhatsappConversations(full ? whatsappUpdates : mergeById(wa.conversations, whatsappUpdates, "conversationId"));
-    if (full) { wa.fullSyncedAt = syncStartedAt; await chatCacheCall(wa.cache, "replaceConversations", wa.conversations); }
+    if (full) {
+      wa.fullSyncedAt = syncStartedAt;
+      const ids=new Set(wa.conversations.map(conversationId));
+      for(const id of wa.recentChats.keys())if(!ids.has(id))wa.recentChats.delete(id);
+    }
     if (wa.selectedId && !selectedConversation()) { wa.selectedId = null; wa.messages = []; wa.overview = null; renderWhatsappPage(); }
     let incoming = [];
     if (selectedChanged) incoming = await loadWhatsappConversation(wa.selectedId, { incremental: true }) || [];
@@ -1561,10 +1679,12 @@ async function pollWhatsapp() {
       : [];
     wa.syncedAt = asDate(result.meta?.syncStartedAt)?.getTime() || syncStartedAt;
     wa.syncState = "live";
-    await Promise.all([
-      chatCacheCall(wa.cache, "putConversations", whatsappUpdates),
-      chatCacheCall(wa.cache, "setMeta", "conversationSyncAt", wa.syncedAt)
-    ]);
+    const snapshot=wa.conversations.slice();
+    const checkpoint=snapshot.length<=10000?{syncedAt:wa.syncedAt,fullSyncedAt:wa.fullSyncedAt}:null;
+    queueWhatsappCache(wa,async()=>{
+      await wa.cache?.[full?'replaceConversations':'putConversations']?.(full?snapshot:whatsappUpdates);
+      await wa.cache?.setMeta?.('completeInbox',checkpoint);
+    });
     if (whatsappUpdates.length || selectedChanged) {
       refreshWhatsappLiveDom({ messagesChanged: incoming.length > 0 || markerUpdates.length > 0 });
     }
@@ -1577,7 +1697,7 @@ async function pollWhatsapp() {
     console.warn("WhatsApp inbox refresh failed", error);
   } finally {
     wa.syncing = false;
-    startWhatsappPolling();
+    if(state.whatsapp===wa)startWhatsappPolling();
   }
 }
 
@@ -1812,9 +1932,9 @@ function utilityTemplatesForSelectedContact() {
   ));
 }
 function conversationId(item) { return item?.conversationId || item?.id || null; }
-function waFilterButton(value, label) {
+function waFilterButton(value, label, counts) {
   const wa = state.whatsapp;
-  const count = inboxCounts(wa.conversations, wa)[value];
+  const count = (counts || inboxCounts(wa.conversations, wa))[value];
   return `<button type="button" data-wa-filter="${value}" class="${wa.filter === value ? "active" : ""}" aria-pressed="${wa.filter === value}">${label}<span class="wa-filter-count">${formatCount(count)}</span></button>`;
 }
 
@@ -1827,9 +1947,9 @@ function waQuickFilters() {
     ${owners.length ? `<div class="wa-owner-filters" role="group" aria-label="Quick owner filters">${owners.map(owner => `<button class="wa-mini-filter" type="button" data-wa-owner="${attr(owner.id)}" title="${attr(owner.name)}" aria-label="Filter by ${attr(owner.name)}" aria-pressed="${wa.ownerFilter === owner.id}">${esc(owner.initial)}</button>`).join("")}</div>` : ""}</div>`;
 }
 
-function waInboxSummary() {
+function waInboxSummary(counts) {
   const wa = state.whatsapp;
-  const counts = inboxCounts(wa.conversations, wa);
+  counts ||= inboxCounts(wa.conversations, wa);
   const shown = wa.conversations.filter(item => inboxMatches(item, wa)).length;
   return `<span>${formatCount(shown)} of ${formatCount(wa.conversations.length)} loaded chats</span><span><strong>${formatCount(counts.messages)}</strong> unread messages</span>`;
 }
@@ -1846,7 +1966,7 @@ function updateWhatsappFilterCounts() {
   });
   document.querySelectorAll("[data-wa-owner]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.waOwner === wa.ownerFilter)));
   const summary = document.querySelector("#wa-inbox-counts");
-  if (summary) summary.innerHTML = waInboxSummary();
+  if (summary) summary.innerHTML = waInboxSummary(counts);
 }
 function orderReference(order) { return order.orderNumber || `ORD-${String(order.orderId || "").slice(-8).toUpperCase()}`; }
 function suggestedTemplate(status) { return ({ CONFIRMED: "order_confirmation", DESIGN_READY: "design_ready", DISPATCHED: "dispatch_update", DELIVERED: "order_delivered" })[status] || null; }
@@ -1905,6 +2025,7 @@ async function chatCacheCall(cache, method, ...args) {
 }
 function freshWhatsappState() {
   return {
+    navigationVersion:0,recentChats:new Map(),cacheWrites:Promise.resolve(),inboxRequest:null,listLimit:100,mediaCache:new Map(),mediaCacheBytes:0,
     drafts: {}, draftDirty: new Set(), draftTimers: {}, preferenceWrites: {}, pendingSends: {}, messageSearch: "", starredOnly: false, sort: "RECENT", olderCursor: null, fullSyncedAt: null, reminderKeys: new Set(),
     conversations: [],
     messages: [],
@@ -1976,112 +2097,135 @@ const ORDER_STATUSES = ["CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION
 
 async function renderMarketing() {
   pageTitle.textContent = "Marketing";
-  const [contactsResponse, audiencesResponse, campaignsResponse, templatesResponse, repliedResponse, usersResponse, metaTemplatesResponse, configuredTemplatesResponse, ordersResponse, utilityClientsResponse] = await Promise.all([
-    marketingApi("/contacts?limit=100", "Customers"),
-    marketingApi("/marketing/audiences?limit=100", "Interested lists"),
-    firstAvailableMarketingApi(["/campaigns?limit=100", "/marketing/campaigns?limit=100"], "Campaigns"),
-    marketingApi("/marketing/templates", "Marketing templates"),
-    optionalMarketingApi("/marketing/replied?limit=100"),
-    optionalMarketingApi("/users?limit=100"),
-    optionalMarketingApi("/whatsapp/templates?limit=100"),
-    optionalMarketingApi("/whatsapp/templates/configured"),
-    loadEligibleUtilityOrders(),
-    loadAllExistingClients()
+  page.innerHTML = '<div class="empty-state">Loading your batches…</div>';
+  const [summary, audiences, campaigns] = await Promise.all([
+    optionalMarketingApi("/marketing/summary"),
+    loadAllBatchPages("/marketing/audiences?limit=100"),
+    loadAllBatchPages("/campaigns?limit=100")
   ]);
-  state.marketing = {
-    contacts: contactsResponse.data || [],
-    orders: ordersResponse.data || [],
-    utilityBatchContacts: utilityClientsResponse.data || [],
-    audiences: audiencesResponse.data || [],
-    campaigns: campaignsResponse.data || [],
-    templates: templatesResponse.data || [],
-    replied: repliedResponse.data || [],
-    users: usersResponse.data || [],
-    metaTemplates: metaTemplatesResponse.data || [],
-    configuredTemplates: configuredTemplatesResponse.data || [],
-    templateLoadError: metaTemplatesResponse.error || configuredTemplatesResponse.error || null,
-    replyLoadError: repliedResponse.error || null,
-    userLoadError: usersResponse.error || null,
-    orderLoadError: ordersResponse.error || null,
-    utilityClientLoadError: utilityClientsResponse.error || null,
-    strictCampaignLifecycle: campaignsResponse.route?.startsWith("/campaigns") === true,
-    decision: state.marketing.decision || null,
-    replyFilter: state.marketing.replyFilter || "ALL",
-    utilityBatchResult: state.marketing.utilityBatchResult || null,
-    utilityBatchIndex: state.marketing.utilityBatchIndex || 0
-  };
-  const stats = aggregateCampaignStats(state.marketing.campaigns);
-  const template = state.marketing.templates.find((item) => item.id === "interest_followup")
-    || state.marketing.templates[0];
-  const segment = currentClientSegment();
-  page.innerHTML = `
-    <div class="section-head marketing-head"><div><p class="eyebrow">CONSENT-FIRST WHATSAPP</p><h1>${esc(segmentLabel(segment))} campaigns</h1><p>Create safe 500-contact batches, run drip follow-ups and move replies into the WhatsApp Inbox until an order is created.</p></div><a class="button button-secondary" href="#whatsapp">Open Inbox</a></div>
-    <div class="marketing-metrics">
-      ${miniStat("Campaigns", state.marketing.campaigns.length)}
-      ${miniStat("Messages queued", stats.sent)}
-      ${miniStat("Customer replies", stats.replied)}
-      ${miniStat("Orders connected", stats.converted)}
+  if (location.hash && location.hash !== "#marketing") return;
+  state.marketing = { ...freshMarketingState(), audiences: audiences.data, campaigns: campaigns.data, strictCampaignLifecycle: true };
+  const counts = summary.error ? null : summary.data;
+  const sorted = [...campaigns.data].sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
+  const history = sorted.filter(item => ["COMPLETED", "CANCELLED", "FAILED"].includes(item.status));
+  const active = sorted.filter(item => !history.includes(item));
+  page.innerHTML = `<div class="simple-marketing">
+    <div class="section-head"><div><h1>Marketing</h1><p>Your contacts. Your batches. Preview before sending.</p></div><div class="simple-header-actions"><a class="button button-secondary" href="#whatsapp">View replies</a><button class="button button-secondary" id="refresh-marketing">Refresh</button></div></div>
+    <div class="simple-marketing-metrics">
+      ${miniStat("Total contacts", counts ? formatCount(counts.totalContacts) : "—")}
+      ${miniStat("Replied", counts ? formatCount(counts.replied) : "—")}
+      ${miniStat("Opted out", counts ? formatCount(counts.optedOut) : "—")}
     </div>
-    <div class="compliance-banner"><span class="compliance-icon">✓</span><div><strong>Marketing safety is enforced by the backend</strong><p>Only customers with a recorded WhatsApp opt-in are enrolled. A reply pauses the drip, STOP opts the customer out, and a new order marks the campaign converted.</p></div></div>
-    <section class="panel segment-batch-panel">
-      <div class="panel-title-row"><div><p class="eyebrow">AUTOMATIC BATCHING</p><h3>Create 500-contact campaign lists</h3><p>Existing clients stay with Ankit and prospects stay with Reshu. Large segments are split into separate audiences of at most 500 contacts.</p></div><span class="badge blue">${esc(segmentLabel(segment))}</span></div>
-      <form id="batch-audience-form" class="batch-audience-form">
-        <div class="form-grid compact-grid">
-          <label class="field">Customer type<select name="relationshipType" required>${segmentOptions()}</select></label>
-          <label class="field">Batch name<input name="name" required placeholder="e.g. August product campaign" /></label>
-          <label class="field">Contacts per batch<input name="batchSize" type="number" min="1" max="500" value="500" required /></label>
-          <label class="field">Description<input name="description" placeholder="Campaign purpose or product" /></label>
-        </div>
-        <div class="batch-audience-actions"><label class="campaign-confirm"><input name="onlyOptedIn" type="checkbox" /> Include only customers whose WhatsApp marketing opt-in is recorded</label><button class="button button-primary" type="submit">Create batches</button></div>
-      </form>
+    <p class="muted simple-count-note">Replied counts unique contacts with a recorded marketing reply. Opted-out contacts are excluded from sending.${counts?.calculatedAt ? ` Counts updated ${esc(shortTime(counts.calculatedAt))}; refresh within 30 seconds may reuse these counts.` : ''}</p>
+    ${summary.error ? '<div class="form-error">Contact counts could not load. Deploy the updated backend, then refresh.</div>' : ""}
+    <section class="panel"><div class="panel-title-row"><div><h3>Your batches</h3><p>Open a batch to check the message and video.</p></div><span class="count-pill">${active.length} batches</span></div>
+      ${campaigns.error || audiences.error ? `<div class="form-error">Some batches could not load completely. ${esc(campaigns.error || audiences.error)}</div>` : ""}
+      <div class="campaign-list">${active.map(simpleCampaignCard).join("") || '<div class="empty-state">No pending batches.</div>'}</div>
     </section>
-    ${renderDirectExistingCampaign(template)}
-    ${renderWhatsAppPolicyTools()}
-    ${renderRepliedProspectsSection()}
-    <div class="marketing-grid">
-      <section class="panel marketing-audience-panel">
-        <div class="panel-title-row"><div><p class="eyebrow">STEP 1</p><h3>Interested customer list</h3><p>Select customers for one reusable audience. Opt-in must be recorded separately and truthfully.</p></div><span class="count-pill">${state.marketing.contacts.length} clients</span></div>
-        <form id="audience-form" class="audience-form">
-          <div class="form-grid compact-grid"><label class="field">List name<input name="name" required placeholder="e.g. Catalogue interested – July" /></label><label class="field">Description<input name="description" placeholder="Where this interest came from" /></label></div>
-          <div class="consent-toolbar"><input id="marketing-contact-search" class="search-input" placeholder="Search customer, phone or city…" /><label>Opt-in source<select id="marketing-consent-source"><option value="WHATSAPP_REPLY">WhatsApp reply</option><option value="WEBSITE_FORM">Website form</option><option value="IN_PERSON">In person</option><option value="PHONE">Phone</option><option value="ORDER_FORM">Order form</option><option value="OTHER">Other</option></select></label></div>
-          <div class="marketing-contact-list"><table><thead><tr><th><input id="select-all-marketing" type="checkbox" aria-label="Select all visible customers" /></th><th>Customer</th><th>WhatsApp consent</th><th>Action</th></tr></thead><tbody>
-            ${state.marketing.contacts.length ? state.marketing.contacts.map(marketingCustomerRow).join("") : '<tr><td colspan="4"><div class="empty-state">No customers found.</div></td></tr>'}
-          </tbody></table></div>
-          <div class="form-actions audience-actions"><span id="audience-selection-count" class="muted">0 selected</span><button class="button button-primary" type="submit">Save interested list</button></div>
-        </form>
-        <div class="saved-audiences"><h4>Saved lists</h4>${state.marketing.audiences.length ? state.marketing.audiences.map((audience) => `<div class="saved-audience"><div><strong>${esc(audience.name)}</strong><small>${esc(audience.description || "Interested customer list")} · ${esc(segmentLabel(audience.relationshipType))}${audience.batchNumber ? ` · Batch ${esc(audience.batchNumber)}/${esc(audience.batchCount)}` : ""}</small></div><span>${esc(audience.contactCount || 0)} customers</span></div>`).join("") : '<p class="muted">No list created yet.</p>'}</div>
-      </section>
-      <section class="panel campaign-builder-panel">
-        <div class="panel-title-row"><div><p class="eyebrow">STEP 2</p><h3>Create text or media drip</h3><p>Each delay is measured after the previous message. Video and files wait for a real open 24-hour customer-service window.</p></div><span class="badge blue">Policy safe</span></div>
-        ${template ? `<div id="campaign-template-preview">${campaignTemplatePreview(template)}</div>` : '<div class="form-error">Marketing template configuration is unavailable.</div>'}
-        <form id="campaign-form" class="campaign-form">
-          <label class="field">Campaign name<input name="name" required placeholder="e.g. July catalogue follow-up" /></label>
-          <label class="field">Interested list<select name="audienceId" required ${state.marketing.audiences.length ? "" : "disabled"}><option value="">Select a list</option>${state.marketing.audiences.map((audience) => `<option value="${attr(audience.audienceId)}">${esc(audience.name)} (${esc(audience.contactCount || 0)})</option>`).join("")}</select></label>
-          <label class="field">Approved Meta template<select name="templateId" id="campaign-template" required>${state.marketing.templates.map((item) => `<option value="${attr(item.id)}" ${item.id === template.id ? "selected" : ""}>${esc(item.label || item.name)} · ${esc(item.name)}</option>`).join("")}</select></label>
-          <div id="campaign-template-header-media">${campaignTemplateHeaderMedia(template)}</div>
-          <label class="field">What they are interested in<input name="interestLabel" required placeholder="e.g. premium catalogue printing" /></label>
-          <div class="form-grid compact-grid">
-            <label class="field">Delivery mode<select name="deliveryMode" id="campaign-delivery-mode"><option value="AUTO">Auto · template outside 24h window</option><option value="OPEN_WINDOW_ONLY">Open 24h window only · supports media</option></select></label>
-            <label class="field">Start rule<select name="trigger" id="campaign-trigger"><option value="MANUAL">Start after campaign launch</option><option value="CUSTOMER_REPLY">Start when customer replies</option></select></label>
-          </div>
-          <div class="drip-steps">
-            ${dripStep(1, 0, "Share the latest options and pricing with our team.", true, true)}
-            ${dripStep(2, 4320, "Would you like us to prepare a quotation for you?", true)}
-            ${dripStep(3, 10080, "Reply here whenever you are ready and our team will help place the order.", true)}
-            ${dripStep(4, 14400, "Would you like to see another product option?", false)}
-            ${dripStep(5, 20160, "We are here whenever you want to continue.", false)}
-          </div>
-          <label class="campaign-confirm"><input name="confirmConsent" type="checkbox" required /> I confirm that the selected customers have permission to receive this type of WhatsApp marketing message.</label>
-          <button class="button button-primary button-full" type="submit" ${state.marketing.audiences.length && template ? "" : "disabled"}>Save campaign draft</button>
-          <p class="muted tiny-note">AUTO mode uses approved Meta marketing templates outside 24 hours. Media steps are sent only in OPEN WINDOW mode; if the window closes, the CRM waits for the next customer reply.</p>
-        </form>
-      </section>
-    </div>
-    <section class="panel campaign-list-panel"><div class="panel-title-row"><div><p class="eyebrow">CAMPAIGN CONTROL</p><h3>Campaigns</h3><p>Draft, submit, approve and schedule campaigns with a visible audit-friendly lifecycle.</p></div></div>
-      <div class="campaign-list">${state.marketing.campaigns.length ? state.marketing.campaigns.map(campaignCard).join("") : '<div class="empty-state">No campaigns yet. Create your first campaign above.</div>'}</div>
-    </section>`;
-  bindMarketingEvents();
+    ${history.length ? `<details class="panel simple-history"><summary>Past & cancelled batches · ${history.length}</summary><div class="campaign-list">${history.map(simpleCampaignCard).join("")}</div></details>` : ""}
+  </div>`;
+  document.querySelector("#refresh-marketing").addEventListener("click", renderMarketing);
+  document.querySelectorAll("[data-preview-batch]").forEach(button => button.addEventListener("click", () => showSimpleCampaignPreview(button.dataset.previewBatch, button)));
 }
+
+function simpleCampaignCard(campaign) {
+  const audience = state.marketing.audiences.find(item => item.audienceId === campaign.audienceId);
+  const count = audience?.contactCount ?? campaign.stats?.total;
+  return `<article class="campaign-card simple-batch-card"><div class="campaign-main"><div><strong>${esc(campaign.name)}</strong><small>${count == null ? "Contact count unavailable" : `${formatCount(count)} contacts`} <span>·</span> ${esc(pretty(campaign.status))}</small></div><button class="button button-primary" data-preview-batch="${attr(campaign.campaignId)}">Preview</button></div><div class="simple-batch-stats"><span><strong>${formatCount(campaign.stats?.sent || 0)}</strong> sent</span><span><strong>${formatCount(campaign.stats?.delivered || 0)}</strong> delivered</span><span><strong>${formatCount(campaign.stats?.replied || 0)}</strong> replied</span></div></article>`;
+}
+
+async function showSimpleCampaignPreview(campaignId, button) {
+  button.disabled = true;
+  const backdrop = document.createElement("div");
+  backdrop.className = "modal-backdrop";
+  backdrop.innerHTML = `<div class="modal simple-preview-modal" role="dialog" aria-modal="true" aria-labelledby="batch-preview-title"><div class="modal-head"><h3 id="batch-preview-title">Batch preview</h3><button class="modal-close" type="button" aria-label="Close preview">×</button></div><div class="simple-preview-content">Loading preview…</div></div>`;
+  document.body.append(backdrop);
+  const urls = [];
+  const close = () => {
+    backdrop.querySelectorAll("video,audio").forEach(media => { media.pause(); media.removeAttribute("src"); media.load(); });
+    backdrop.remove(); urls.forEach(url => URL.revokeObjectURL(url));
+    document.removeEventListener("keydown", escape); window.removeEventListener("hashchange", close);
+    button.disabled = false; if (button.isConnected) button.focus();
+  };
+  const escape = event => {
+    if (event.key === "Escape") close();
+    if (event.key === "Tab") {
+      const focusable = [...backdrop.querySelectorAll('button:not(:disabled),select,a[href],video[controls],audio[controls]')];
+      const first = focusable[0], last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+    }
+  };
+  document.addEventListener("keydown", escape);
+  window.addEventListener("hashchange", close);
+  backdrop.querySelector(".modal-close").addEventListener("click", close);
+  backdrop.addEventListener("click", event => { if (event.target === backdrop) close(); });
+  backdrop.querySelector(".modal-close").focus();
+  const content = backdrop.querySelector(".simple-preview-content");
+  try {
+    const { data } = await api(`/marketing/campaigns/${encodeURIComponent(campaignId)}/preview`);
+    if (!backdrop.isConnected) return;
+    const campaign = data.campaign;
+    backdrop.querySelector("#batch-preview-title").textContent = campaign.name;
+    const variants = data.steps.flatMap((step, index) => step.variants.map(variant => ({ ...variant, step: index + 1, delay: step.delayMinutes })));
+    if (!variants.length) throw new Error("This batch has no message to preview.");
+    const multiple = variants.length > 1;
+    content.innerHTML = `<p class="muted">${formatCount(data.contactCount)} contacts · ${esc(pretty(campaign.status))}</p>
+      ${multiple ? `<label class="field" for="batch-preview-variant">Message preview<select id="batch-preview-variant">${variants.map((variant, index) => `<option value="${index}">${data.steps.length > 1 ? `Step ${variant.step} · ` : ""}${esc(variant.label)}</option>`).join("")}</select></label>` : ""}
+      <p class="muted tiny-note simple-sample-hint"></p>
+      ${multiple ? '<p class="muted tiny-note">Clients who replied in the last 24 hours can receive the recent-reply message. Other clients receive the template.</p>' : ""}
+      <div class="simple-message-stage"></div>
+      <p class="muted tiny-note">Preview shows the current saved content. Previously sent messages are in the <a href="#whatsapp">WhatsApp Inbox</a>.</p>
+      <div class="simple-preview-actions">${campaignActionButtons(campaign)}</div>`;
+    content.querySelector('[data-campaign-action="details"]')?.remove();
+    content.querySelector('[data-campaign-action="schedule"]')?.remove();
+    const actionLabels = { submit: "Submit for approval", approve: "Approve batch", start: "Send this batch", cancel: "Cancel batch" };
+    content.querySelectorAll(".campaign-action").forEach(actionButton => {
+      actionButton.textContent = actionLabels[actionButton.dataset.campaignAction] || actionButton.textContent;
+      actionButton.addEventListener("click", async () => { if (await changeCampaignState(actionButton)) close(); });
+    });
+    let renderId = 0;
+    const mediaCache = new Map();
+    const renderVariant = async index => {
+      const ticket = ++renderId;
+      const variant = variants[index];
+      content.querySelector(".simple-sample-hint").textContent = variant.templateName
+        ? '“Customer” is an example; each recipient gets their saved name.' : 'This is the saved message for this batch.';
+      const stage = content.querySelector(".simple-message-stage");
+      stage.querySelectorAll("video,audio").forEach(media => media.pause());
+      stage.innerHTML = `<div class="simple-message-bubble"><div class="simple-preview-media"></div><p>${esc(variant.text || "")}</p><small>${esc(variant.templateName || "Message")}${variant.delay ? ` · After ${variant.delay} minutes` : ""}</small></div>`;
+      const target = stage.querySelector(".simple-preview-media");
+      if (!variant.mediaRequired && !variant.attachmentIds.length) target.innerHTML = '<small class="muted">No media attached</small>';
+      if (variant.mediaRequired && !variant.attachmentIds.length) target.innerHTML = '<p class="form-error">Required template media is missing.</p>';
+      for (const id of variant.attachmentIds) {
+        const holder = document.createElement("div"); holder.textContent = "Loading attached media…"; target.append(holder);
+        try {
+          if (!mediaCache.has(id)) mediaCache.set(id, fetchAttachmentBlob(id).then(blob => {
+            if (!backdrop.isConnected) return null;
+            const url = URL.createObjectURL(blob); urls.push(url); return { url, type: blob.type };
+          }));
+          const media = await mediaCache.get(id);
+          if (!media || ticket !== renderId || !backdrop.isConnected) return;
+          holder.innerHTML = "";
+          if (media.type.startsWith("video/") || media.type.startsWith("audio/")) {
+            const player = document.createElement(media.type.startsWith("video/") ? "video" : "audio");
+            player.src = media.url; player.controls = true; player.preload = "metadata"; holder.append(player);
+            player.addEventListener("error", () => { holder.textContent = "This media could not be played in your browser."; });
+          } else if (media.type.startsWith("image/")) {
+            const image = document.createElement("img"); image.src = media.url; image.alt = "Attached campaign image"; holder.append(image);
+          } else {
+            const link = document.createElement("a"); link.href = media.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "Open attached document"; holder.append(link);
+          }
+        } catch (error) { holder.className = "form-error"; holder.textContent = `Media preview unavailable: ${error.message}`; }
+      }
+    };
+    content.querySelector("#batch-preview-variant")?.addEventListener("change", event => renderVariant(Number(event.target.value)));
+    await renderVariant(0);
+  } catch (error) {
+    if (backdrop.isConnected) content.innerHTML = `<div class="form-error">Preview could not load: ${esc(error.message)}. Check that the updated backend is deployed, then try again.</div>`;
+  } finally { button.disabled = false; }
+}
+
 
 async function marketingApi(path, label) {
   try {
@@ -2770,9 +2914,11 @@ async function changeCampaignState(button) {
     const messages = { launch: "launched", submit: "submitted for approval", approve: "approved", schedule: "scheduled", start: "started", pause: "paused", resume: "resumed", cancel: "cancelled" };
     notify(`Campaign ${messages[action] || "updated"}.`);
     await renderMarketing();
+    return true;
   } catch (error) {
     notify(error.message, true);
     button.disabled = false;
+    return false;
   }
 }
 
@@ -3179,7 +3325,7 @@ function readSession() { try { return JSON.parse(localStorage.getItem(authKey));
 function saveSession() { localStorage.setItem(authKey, JSON.stringify(state.session)); }
 
 // Smart inbox helpers share the existing authenticated API and durable outbox.
-async function inboxAllPages(path) {
+async function inboxAllPages(path, onPage) {
   const items = []; const seen = new Set(); let cursor = null; let response; let syncStartedAt;
   do {
     response = await api(`${path}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
@@ -3188,6 +3334,7 @@ async function inboxAllPages(path) {
       path += `&to=${encodeURIComponent(syncStartedAt)}`;
     }
     items.push(...(response.data || []));
+    if(onPage)onPage(response);
     const next = response.pagination?.hasMore ? response.pagination.nextCursor : null;
     if (response.pagination?.hasMore && (!next || seen.has(next))) throw new Error('Inbox sync returned an invalid cursor. Refresh to retry.');
     if (next) seen.add(next);
@@ -3343,7 +3490,8 @@ function smartClientControls() {
 }
 
 function smartDialog(title,body) {
-  document.querySelector('#wa-smart-dialog')?.remove();
+  const existing = document.querySelector('#wa-smart-dialog');
+  if (existing) { existing.close(); existing.remove(); }
   const dialog=document.createElement('dialog');dialog.id='wa-smart-dialog';dialog.className='wa-smart-dialog';
   dialog.innerHTML=`<header><h2>${esc(title)}</h2><button type="button" aria-label="Close dialog">×</button></header>${body}`;
   dialog.querySelector('header button').onclick=()=>{dialog.close();dialog.remove();};
@@ -3388,3 +3536,155 @@ function smartSendKey(id, body) {
   if (wa.pendingSends[id]?.signature !== signature) wa.pendingSends[id]={signature,key:`${id}-${Date.now()}-${Math.random().toString(36).slice(2)}`};
   return wa.pendingSends[id].key;
 }
+
+function referencePreferences() {
+  try { return JSON.parse(localStorage.getItem(`rx-reference-ui:${state.session?.userId || state.session?.email || 'guest'}`) || '{}'); } catch { return {}; }
+}
+function saveReferencePreferences(patch) {
+  try { localStorage.setItem(`rx-reference-ui:${state.session?.userId || state.session?.email || 'guest'}`, JSON.stringify({...referencePreferences(),...patch})); } catch { /* UI still works without persistent storage. */ }
+}
+function referenceReplyTimer(item) {
+  const expires = (asDate(item.lastInboundAt)?.getTime() || 0) + 86400000;
+  const minutes = Math.ceil((expires - Date.now()) / 60000);
+  if (minutes <= 0) return '';
+  const text = `${String(Math.floor(minutes / 60)).padStart(2,'0')}:${String(minutes % 60).padStart(2,'0')}`;
+  return `<span class="ref-reply-timer" title="Free reply window remaining">● ${text}</span>`;
+}
+function referenceChatHint(item) {
+  const products = item.lead?.productRequired;
+  const parts = [item.preferences?.draft ? 'Draft saved' : '', ...(Array.isArray(products) ? products : products ? [products] : []), item.lead?.leadStatus ? pretty(item.lead.leadStatus) : ''];
+  return parts.filter(Boolean).length ? `<em class="wa-smart-hint">${esc(parts.filter(Boolean).join(' · '))}</em>` : '';
+}
+function applyReferencePreferences() {
+  const prefs = referencePreferences();
+  const root = document.querySelector('.wa-shell'); if (!root) return;
+  root.style.setProperty('--reference-inbox-width', `${Math.max(290,Math.min(520,Number(prefs.width) || 370))}px`);
+  root.style.setProperty('--reference-message-size', `${Math.max(14,Math.min(22,Number(prefs.fontSize) || 16))}px`);
+  root.dataset.referenceTheme = prefs.theme === 'dark' ? 'dark' : 'light';
+  root.dataset.referenceWallpaper = prefs.wallpaper === 'plain' ? 'plain' : 'grid';
+}
+function bindReferenceWhatsapp() {
+  applyReferencePreferences();
+  const on=(selector,handler)=>document.querySelector(selector)?.addEventListener('click',handler);
+  on('#wa-toggle-filters',event=>{
+    const filters=document.querySelector('#wa-reference-filters'); filters.hidden=!filters.hidden;
+    event.currentTarget.setAttribute('aria-expanded',String(!filters.hidden)); saveReferencePreferences({filtersCollapsed:filters.hidden});
+  });
+  on('#wa-reference-refresh',()=>document.querySelector('#wa-smart-refresh')?.click());
+  on('#wa-reference-suggest',()=>document.querySelector('#wa-ai-suggest')?.click());
+  on('#wa-reference-search',()=>{ const details=document.querySelector('.ref-chat-tools'); details.open=!details.open; if(details.open)document.querySelector('#wa-message-search')?.focus(); });
+  on('#wa-reference-photos',()=>{ const input=document.querySelector('#wa-attachment-input'); input.accept='image/*,video/*'; input.click(); });
+  on('#wa-reference-emoji',openReferenceEmoji);
+  on('#wa-reference-new-chat',openReferenceNewChat);
+  if (state.whatsapp.recording) {
+    const pause = document.createElement('button'); pause.type='button'; pause.className='wa-tool-button'; pause.textContent='Ⅱ'; pause.setAttribute('aria-label','Pause recording');
+    document.querySelector('#wa-record-audio')?.before(pause);
+    pause.onclick=()=>{const recorder=state.whatsapp.mediaRecorder;if(recorder?.state==='recording'){recorder.pause();pause.textContent='▶';pause.setAttribute('aria-label','Resume recording');}else if(recorder?.state==='paused'){recorder.resume();pause.textContent='Ⅱ';pause.setAttribute('aria-label','Pause recording');}};
+  }
+  on('#wa-reference-settings',()=>{
+    const p=referencePreferences();
+    const dialog=smartDialog('Chat settings',`<label>Appearance<select id="ref-theme"><option value="light">Light</option><option value="dark">Dark</option></select></label><label>Wallpaper<select id="ref-wallpaper"><option value="grid">Grid</option><option value="plain">Plain</option></select></label><label>Message size<input id="ref-size" type="range" min="14" max="22" value="${Math.max(14,Math.min(22,Number(p.fontSize)||16))}"></label><button id="ref-alerts" type="button">Enable desktop alerts</button>`);
+    dialog.querySelector('#ref-theme').value=p.theme==='dark'?'dark':'light'; dialog.querySelector('#ref-wallpaper').value=p.wallpaper==='plain'?'plain':'grid';
+    dialog.querySelectorAll('select,input').forEach(input=>input.addEventListener('input',()=>{saveReferencePreferences({theme:dialog.querySelector('#ref-theme').value,wallpaper:dialog.querySelector('#ref-wallpaper').value,fontSize:Number(dialog.querySelector('#ref-size').value)});applyReferencePreferences();}));
+    dialog.querySelector('#ref-alerts').onclick=enableDesktopAlerts;
+  });
+  const resizer=document.querySelector('#wa-reference-resizer');
+  if(resizer){
+    const setWidth=value=>{ const width=Math.max(290,Math.min(520,value));saveReferencePreferences({width});applyReferencePreferences();resizer.setAttribute('aria-valuenow',width); };
+    resizer.setAttribute('aria-valuemin','290');resizer.setAttribute('aria-valuemax','520');resizer.setAttribute('aria-valuenow',String(referencePreferences().width||370));
+    resizer.addEventListener('pointerdown',event=>{resizer.setPointerCapture(event.pointerId);});
+    resizer.addEventListener('pointermove',event=>{if(resizer.hasPointerCapture(event.pointerId))setWidth(event.clientX-document.querySelector('.wa-shell').getBoundingClientRect().left);});
+    resizer.addEventListener('dblclick',()=>setWidth(370));
+    resizer.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();setWidth((Number(referencePreferences().width)||370)+(event.key==='ArrowLeft'?-20:20));}});
+  }
+}
+async function openReferenceEmoji() {
+  const id=state.whatsapp.selectedId;
+  const dialog=smartDialog('Choose emoji','<input id="ref-emoji-search" type="search" placeholder="Search emojis" aria-label="Search emojis"><div id="ref-emoji-grid" class="ref-emoji-grid">Loading…</div>');
+  try {
+    const response=await fetch('/emoji-data.json');if(!response.ok)throw new Error('Emoji list unavailable');
+    const emojis=await response.json();
+    const render=()=>{
+      const needle=dialog.querySelector('#ref-emoji-search').value.toLowerCase();
+      dialog.querySelector('#ref-emoji-grid').innerHTML=emojis.filter(item=>item.name.toLowerCase().includes(needle)).slice(0,160).map(item=>`<button type="button" data-reference-emoji="${attr(item.emoji)}" title="${attr(item.name)}" aria-label="${attr(item.name)}">${esc(item.emoji)}</button>`).join('') || '<p>No matching emojis.</p>';
+      dialog.querySelectorAll('[data-reference-emoji]').forEach(button=>button.onclick=()=>{
+        if(state.whatsapp.selectedId!==id)return;
+        const input=document.querySelector('#wa-message-input');if(!input)return;
+        input.setRangeText(button.dataset.referenceEmoji,input.selectionStart,input.selectionEnd,'end');saveSmartDraft();dialog.close();dialog.remove();input.focus();
+      });
+    };
+    dialog.querySelector('#ref-emoji-search').oninput=render;render();dialog.querySelector('#ref-emoji-search').focus();
+  }catch(error){dialog.querySelector('#ref-emoji-grid').textContent=error.message;}
+}
+function previewReferenceAttachments(files, caption='') {
+  if(!files.length)return;
+  const id=state.whatsapp.selectedId;
+  const recipient=selectedConversation()?.contact;
+  const dialog=smartDialog('Preview before sending',`<p>To ${esc(recipient?.companyName || recipient?.contactPerson || recipient?.primaryPhone || 'selected client')}</p><div class="ref-file-list"></div><p id="ref-file-status" role="status"></p><button id="ref-send-files" type="button">Send selected files</button>`);
+  const urls=[];
+  const rows=files.map((file,index)=>{
+    const url=URL.createObjectURL(file);urls.push(url);
+    const row=document.createElement('section');row.className='ref-file-preview';
+    const type=messageTypeForFile(file);
+    row.innerHTML=`<header><strong>${esc(file.name)}</strong><button type="button" aria-label="Remove ${attr(file.name)}">×</button></header>${type==='IMAGE'?`<img src="${attr(url)}" alt="Selected image">`:type==='VIDEO'?`<video src="${attr(url)}" controls preload="metadata"></video>`:type==='AUDIO'?`<audio src="${attr(url)}" controls></audio>`:'<p>Document attachment</p>'}${type==='AUDIO'?'':`<label>Caption<textarea maxlength="4096">${esc(index===0?caption:'')}</textarea></label>`}`;
+    const data={file,row,removed:false};row.querySelector('button').onclick=()=>{data.removed=true;row.querySelectorAll('video,audio').forEach(m=>m.pause());row.remove();};
+    dialog.querySelector('.ref-file-list').append(row);return data;
+  });
+  const cleanup=()=>{dialog.querySelectorAll('video,audio').forEach(m=>{m.pause();m.removeAttribute('src');m.load();});urls.forEach(url=>URL.revokeObjectURL(url));};
+  dialog.addEventListener('close',cleanup,{once:true});
+  dialog.querySelector('#ref-send-files').onclick=async event=>{
+    const button=event.currentTarget;button.disabled=true;
+    const status=dialog.querySelector('#ref-file-status');
+    const selected=rows.filter(row=>!row.removed);
+    if(!selected.length){status.textContent='Choose at least one file.';button.disabled=false;return;}
+    selected.forEach(entry=>entry.row.querySelectorAll('button,textarea').forEach(control=>control.disabled=true));
+    for(const entry of selected){
+      if(!dialog.open || state.whatsapp.selectedId!==id){status.textContent='Chat changed or preview closed. Remaining files were not sent.';return;}
+      status.textContent=`Sending ${entry.file.name}…`;
+      const sent=await sendAttachmentFile(entry.file,entry.row.querySelector('textarea')?.value.trim()||'');
+      if(!sent){status.textContent='Stopped after an error. Check the conversation before trying again.';return;}
+      entry.row.querySelectorAll('button,textarea').forEach(control=>control.disabled=true);
+    }
+    status.textContent='Selected files queued.';button.textContent='Queued';
+  };
+}
+
+async function encodeReferenceVoice(file) {
+  const context = new (window.AudioContext || window.webkitAudioContext)();
+  try {
+    const decoded = await context.decodeAudioData(await file.arrayBuffer());
+    const samples = decoded.getChannelData(0).slice();
+    const worker = new Worker('/audio-encoder.js');
+    const blob = await new Promise((resolve,reject) => {
+      const timeout=setTimeout(()=>{worker.terminate();reject(new Error('Encoding timed out'));},30000);
+      worker.onmessage=event=>{clearTimeout(timeout);worker.terminate();event.data.error?reject(new Error(event.data.error)):resolve(event.data.blob);};
+      worker.onerror=()=>{clearTimeout(timeout);worker.terminate();reject(new Error('Audio encoder unavailable'));};
+      worker.postMessage({samples,sampleRate:decoded.sampleRate},[samples.buffer]);
+    });
+    return new File([blob],`voice-note-${Date.now()}.mp3`,{type:'audio/mpeg'});
+  } finally { await context.close(); }
+}
+
+function openReferenceNewChat() {
+  const dialog=smartDialog('New conversation','<p>Choose an existing client. Opening a chat does not send a message.</p><input id="ref-client-search" type="search" placeholder="Search name or phone" aria-label="Search clients"><div id="ref-client-results">Type a name or number.</div><a href="#clients">Open client directory / add a client</a>');
+  let timer,searchVersion=0;
+  dialog.querySelector('#ref-client-search').oninput=event=>{
+    clearTimeout(timer);const needle=event.target.value.trim();const version=++searchVersion;
+    if(!needle){dialog.querySelector('#ref-client-results').textContent='Type a name or number.';return;}
+    timer=setTimeout(async()=>{
+      try{
+        const {data,pagination}=await api(`/contacts?limit=100&search=${encodeURIComponent(needle)}`);
+        if(!dialog.open||version!==searchVersion)return;
+        dialog.querySelector('#ref-client-results').innerHTML=data.map(contact=>`<button class="ref-new-client" type="button" data-ref-contact="${attr(contact.contactId)}" ${contact.primaryPhone?'':'disabled'}><strong>${esc(contact.companyName||contact.contactPerson||'Client')}</strong><small>${esc(contact.primaryPhone||'No phone number')}</small></button>`).join('') || '<p>No matching clients in this search page. Try the full number or use the client directory.</p>';
+        if(pagination?.hasMore)dialog.querySelector('#ref-client-results').insertAdjacentHTML('beforeend','<p>More results available in the client directory.</p>');
+        dialog.querySelectorAll('[data-ref-contact]').forEach(button=>button.onclick=async()=>{
+          button.disabled=true;
+          try{const {data:conversation}=await api('/conversations/start',{method:'POST',body:{contactId:button.dataset.refContact}});dialog.close();dialog.remove();location.hash=`#whatsapp/${conversationId(conversation)}`;}catch(error){notify(error.message,true);button.disabled=false;}
+        });
+      }catch(error){if(dialog.open&&version===searchVersion)dialog.querySelector('#ref-client-results').textContent=error.message;}
+    },300);
+  };
+  dialog.addEventListener('close',()=>clearTimeout(timer),{once:true});dialog.querySelector('#ref-client-search').focus();
+}
+
+

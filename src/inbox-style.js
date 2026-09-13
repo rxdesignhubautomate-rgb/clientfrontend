@@ -1,5 +1,6 @@
 // Presentation helpers only. All data continues to come from the client CRM.
 const paths = {
+  image: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8" cy="8" r="2"/><path d="m3 17 5-5 4 4 4-6 5 7"/>',
   chat: '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H5l-3 2V11.5A8.5 8.5 0 0 1 10.5 3h2a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 9h10M7 13h7"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
@@ -36,45 +37,53 @@ export function avatarStyle(name = "") {
   return `--avatar-bg:${background};--avatar-ink:${ink}`;
 }
 
-export function inboxMatches(item, { search = "", filter = "ALL", ownerFilter = "", tagFilter = "" } = {}) {
-  const contact = item.contact || {};
-  const needle = search.trim().toLowerCase();
-  const haystack = [contact.companyName, contact.contactPerson, contact.primaryPhone, contact.city, item.lastMessagePreview, item.lead?.leadStatus, ...(item.lead?.productRequired || [])].join(" ").toLowerCase();
-  if (needle && !haystack.includes(needle)) return false;
-  if (ownerFilter && (item.assignedTo || contact.assignedTo || "") !== ownerFilter) return false;
-  if (tagFilter && !(contact.tags || []).includes(tagFilter)) return false;
-  if (filter === "ARCHIVED") return Boolean(item.preferences?.archived);
-  if (item.preferences?.archived) return false;
-  if (filter === "UNREAD") return Number(item.unreadCount || 0) > 0 || item.preferences?.manualUnread === true;
-  if (filter === "READ") return !(Number(item.unreadCount || 0) > 0 || item.preferences?.manualUnread);
-  const remaining = inboxTime(item.lastInboundAt) + 86400000 - Date.now();
-  if (filter === "WINDOW") return remaining > 0;
-  if (filter === "CLOSING") return remaining > 0 && remaining <= 3600000;
-  if (filter === "HOT") return ['HIGH','VERY_HIGH'].includes(item.lead?.interestLevel) || item.lead?.priority === 'HIGH' || (contact.tags || []).includes('HOT');
-  if (filter === "QUOTATION") return item.lead?.leadStatus === 'QUOTATION_SENT';
-  if (filter === "FOLLOWUP") return Boolean(item.nextFollowUpAt || item.lead?.nextFollowupDate || item.lead?.leadStatus?.startsWith('FOLLOW_UP'));
-  if (filter === "DUE") {
-    const due = inboxTime(item.nextFollowUpAt || item.lead?.nextFollowupDate);
-    const end = new Date(); end.setHours(23,59,59,999);
-    return due > 0 && due <= end.getTime();
-  }
-  if (filter === "OPEN") return item.status !== "CLOSED";
-  if (filter === "IMPORTANT") return (contact.tags || []).includes("IMPORTANT");
-  return true;
+
+function matchesScope(item, {search='',ownerFilter='',tagFilter=''}={}) {
+  const contact=item.contact || {};
+  if(ownerFilter && (item.assignedTo || contact.assignedTo || '')!==ownerFilter)return false;
+  if(tagFilter && !(contact.tags || []).includes(tagFilter))return false;
+  const needle=search.trim().toLowerCase();
+  if(!needle)return true;
+  const products=item.lead?.productRequired;
+  return [contact.companyName,contact.contactPerson,contact.primaryPhone,contact.city,item.lastMessagePreview,item.lead?.leadStatus,...(Array.isArray(products)?products:products?[products]:[])].join(' ').toLowerCase().includes(needle);
 }
 
-export function inboxCounts(conversations, options = {}) {
-  // Counts reflect the selected search, owner and tag, before the status filter.
-  const scoped = conversations.filter(item => inboxMatches(item, { ...options, filter: "ALL" }));
+function statusFlags(item, now, endOfDay) {
+  const tags=item.contact?.tags || [],lead=item.lead || {};
+  const unread=Number(item.unreadCount || 0)>0 || item.preferences?.manualUnread===true;
+  const remaining=inboxTime(item.lastInboundAt)+86400000-now;
+  const due=inboxTime(item.nextFollowUpAt || lead.nextFollowupDate);
   return {
-    ALL: scoped.length,
-    UNREAD: scoped.filter(item => Number(item.unreadCount || 0) > 0 || item.preferences?.manualUnread).length,
-    OPEN: scoped.filter(item => item.status !== "CLOSED").length,
-    IMPORTANT: scoped.filter(item => (item.contact?.tags || []).includes("IMPORTANT")).length,
-    messages: scoped.reduce((total, item) => total + Math.max(0, Number(item.unreadCount) || 0), 0),
-    ...Object.fromEntries(['READ','WINDOW','CLOSING','HOT','QUOTATION','FOLLOWUP','DUE','ARCHIVED'].map(filter => [filter, conversations.filter(item => inboxMatches(item, {...options,filter})).length]))
+    ALL:true,UNREAD:unread,READ:!unread,OPEN:item.status!=='CLOSED',IMPORTANT:tags.includes('IMPORTANT'),
+    WINDOW:remaining>0,MARKETING:Boolean(item.lastMarketingReplyAt),CLOSING:remaining>0 && remaining<=3600000,
+    HOT:['HIGH','VERY_HIGH'].includes(lead.interestLevel)||lead.priority==='HIGH'||tags.includes('HOT'),
+    QUOTATION:lead.leadStatus==='QUOTATION_SENT',FOLLOWUP:Boolean(item.nextFollowUpAt||lead.nextFollowupDate||lead.leadStatus?.startsWith('FOLLOW_UP')),
+    DUE:due>0 && due<=endOfDay
   };
 }
+
+export function inboxMatches(item, options={}) {
+  if(!matchesScope(item,options))return false;
+  if(options.filter==='ARCHIVED')return Boolean(item.preferences?.archived);
+  if(item.preferences?.archived)return false;
+  if(!options.filter || options.filter==='ALL')return true;
+  const end=new Date();end.setHours(23,59,59,999);
+  return statusFlags(item,Date.now(),end.getTime())[options.filter] ?? true;
+}
+
+export function inboxCounts(conversations, options={}) {
+  const counts=Object.fromEntries(['ALL','UNREAD','READ','OPEN','IMPORTANT','WINDOW','MARKETING','CLOSING','HOT','QUOTATION','FOLLOWUP','DUE','ARCHIVED','messages'].map(key=>[key,0]));
+  const now=Date.now(),end=new Date(now);end.setHours(23,59,59,999);
+  for(const item of conversations){
+    if(!matchesScope(item,options))continue;
+    if(item.preferences?.archived){counts.ARCHIVED++;continue;}
+    const flags=statusFlags(item,now,end.getTime());
+    for(const [key,matches] of Object.entries(flags))if(matches)counts[key]++;
+    counts.messages+=Math.max(0,Number(item.unreadCount)||0);
+  }
+  return counts;
+}
+
 
 function inboxTime(value) {
   if (value?._seconds) return value._seconds * 1000;
@@ -90,3 +99,4 @@ export function inboxOwners(users) {
   }
   return [...unique.values()];
 }
+

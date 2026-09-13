@@ -49,6 +49,7 @@ function createHarness({ mobile = false } = {}) {
   const context = vm.createContext({
     uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners, URL, URLSearchParams, Date, Intl, console, setTimeout, clearTimeout,
     window: { matchMedia: () => ({ matches: mobile }) },
+    config:{apiBaseUrl:'https://example.test/api'},pageTitle:{textContent:''},location:{hash:'#whatsapp'},WHATSAPP_SYNC_OVERLAP_MS:2000,
     document: { querySelector: () => null, querySelectorAll: () => [] },
     requestAnimationFrame: () => {},
     page: { innerHTML: '' },
@@ -172,4 +173,125 @@ test('empty inbox produces a complete render with the existing start-chat link',
   assert.ok(context.page.innerHTML.includes('No WhatsApp conversation yet'));
   assert.ok(context.page.innerHTML.includes('href="#clients"'));
   assert.ok(context.page.innerHTML.includes('0 of 0 loaded chats'));
+});
+
+test('marketing replies filter uses reply records and combines with owner filters', () => {
+  const items = [
+    {conversationId:'reply',lastMarketingReplyAt:new Date(),assignedTo:'ankit',unreadCount:0},
+    {conversationId:'unread',assignedTo:'ankit',unreadCount:3},
+    {conversationId:'other',lastMarketingReplyAt:new Date(),assignedTo:'reshu',unreadCount:1}
+  ];
+  assert.deepEqual(items.filter(item=>inboxMatches(item,{filter:'MARKETING',ownerFilter:'ankit'})).map(item=>item.conversationId),['reply']);
+  assert.equal(inboxCounts(items).MARKETING,2);
+});
+
+test('selecting attachments opens a review without uploading or sending', async () => {
+  const {context,calls}=createHarness();
+  const files=[{name:'sample.pdf',type:'application/pdf'},{name:'photo.jpg',type:'image/jpeg'}];
+  context.files=files;
+  vm.runInContext('previewReferenceAttachments = files => { previewedFiles = files; };',context);
+  await vm.runInContext('sendSelectedAttachment({target:{files,value:"chosen"}})',context);
+  assert.deepEqual(Array.from(context.previewedFiles),files);
+  assert.equal(calls.length,0);
+});
+
+test('bundled voice worker encodes microphone samples into an MP3 attachment', async () => {
+  let result;
+  const context=vm.createContext({Blob,Int16Array,Uint8Array,console,self:{postMessage:value=>{result=value;}}});
+  context.importScripts=name=>vm.runInContext(fs.readFileSync(new URL('../src/'+name,import.meta.url),'utf8'),context);
+  vm.runInContext(fs.readFileSync(new URL('../src/audio-encoder.js',import.meta.url),'utf8'),context);
+  const samples=Float32Array.from({length:44100},(_,i)=>Math.sin(2*Math.PI*440*i/44100)*0.2);
+  context.self.onmessage({data:{samples,sampleRate:44100}});
+  assert.equal(result.error,undefined);
+  assert.equal(result.blob.type,'audio/mpeg');
+  const bytes=new Uint8Array(await result.blob.arrayBuffer());
+  assert.ok(bytes.length>1000);
+  assert.equal(bytes[0],0xff);
+  assert.equal(bytes[1]&0xe0,0xe0);
+});
+
+test('large inbox renders 100 rows while search still finds clients beyond that page',()=>{
+  const {context,wa}=createHarness();
+  wa.conversations=Array.from({length:2000},(_,i)=>({conversationId:String(i),contact:{companyName:'Client '+i}}));
+  let html=vm.runInContext('waConversationList()',context);
+  assert.equal((html.match(/data-conversation-id=/g)||[]).length,100);
+  assert.ok(html.includes('1,900 remaining'));
+  wa.search='Client 1999';html=vm.runInContext('waConversationList()',context);
+  assert.ok(html.includes('data-conversation-id="1999"'));
+});
+
+test('cached chat paints before network and never reloads the inbox on chat switch',async()=>{
+  const {context,wa,calls}=createHarness();
+  wa.conversations=[{conversationId:'b',contactId:'cb',lastInboundAt:new Date(),contact:{contactId:'cb',companyName:'Client B'}}];
+  wa.cacheHydrated=true;wa.fullSyncedAt=Date.now();wa.metadataAt=Date.now();wa.cache={putMessages:()=>new Promise(()=>{})};
+  wa.recentChats.set('b',{messages:[{messageId:'old',conversationId:'b',text:'Cached reply',createdAt:new Date()}],overview:{contact:wa.conversations[0].contact,orders:[]},overviewCachedAt:Date.now()});
+  let release;
+  context.network=()=>new Promise(resolve=>{release=resolve;});context.paints=[];
+  vm.runInContext(`renderWhatsappPage=()=>paints.push(state.whatsapp.messages.map(m=>m.text));startWhatsappPolling=()=>{};api=async path=>{recordCall(path);return network();};`,context);
+  const loading=vm.runInContext("renderWhatsapp('b')",context);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(Array.from(context.paints[0]),['Cached reply']);
+  assert.equal(calls.length,1);assert.ok(calls[0].path.startsWith('/conversations/b/messages?'));
+  release({data:[{messageId:'new',conversationId:'b',text:'Fresh reply',createdAt:new Date()}]});
+  await loading;
+  assert.ok(context.paints.at(-1).includes('Fresh reply'));
+});
+
+test('late message response cannot overwrite a newer chat selection',async()=>{
+  const {context,wa}=createHarness();
+  wa.conversations=[{conversationId:'a',contactId:'ca'},{conversationId:'b',contactId:'cb'}];
+  wa.selectedId='a';wa.messagesConversationId='a';wa.overview={contact:{contactId:'ca'},orders:[]};wa.overviewCachedAt=Date.now();
+  let release;context.network=()=>new Promise(resolve=>{release=resolve;});
+  vm.runInContext('api=()=>network()',context);
+  const request=vm.runInContext("loadWhatsappConversation('a')",context);
+  wa.selectedId='b';wa.navigationVersion++;wa.messages=[{messageId:'b-message',text:'B stays visible'}];
+  release({data:[{messageId:'a-message',text:'Late A'}]});await request;
+  assert.equal(wa.messages[0].messageId,'b-message');
+});
+
+test('media previews reuse one fetch, expire and reset with the user session',async()=>{
+  const {context,wa}=createHarness();let downloads=0;
+  context.download=async()=>{downloads++;return {size:100};};
+  vm.runInContext('fetchAttachmentBlobUncached=()=>download()',context);
+  await Promise.all([vm.runInContext("fetchAttachmentBlob('file')",context),vm.runInContext("fetchAttachmentBlob('file')",context)]);
+  await vm.runInContext("fetchAttachmentBlob('file')",context);assert.equal(downloads,1);
+  wa.mediaCache.get('file').expiresAt=0;await vm.runInContext("fetchAttachmentBlob('file')",context);assert.equal(downloads,2);
+  vm.runInContext('state.whatsapp=freshWhatsappState()',context);
+  await vm.runInContext("fetchAttachmentBlob('file')",context);assert.equal(downloads,3);
+});
+
+test('a first inbox page becomes available while later pages are still pending',async()=>{
+  const {context}=createHarness();let release;let reads=0;
+  context.requestPage=()=>++reads===1?Promise.resolve({data:[{id:'first'}],pagination:{hasMore:true,nextCursor:'next'}}):new Promise(resolve=>{release=resolve;});
+  context.pages=[];vm.runInContext('api=()=>requestPage()',context);
+  const request=vm.runInContext("inboxAllPages('/conversations?limit=100',page=>pages.push(page.data[0].id))",context);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(Array.from(context.pages),['first']);
+  release({data:[{id:'last'}],pagination:{hasMore:false}});
+  const result=await request;assert.equal(result.data.length,2);
+});
+
+test('metadata revalidates on a cached inbox and concurrent refreshes share one request',async()=>{
+  const {context,wa,calls}=createHarness();wa.fullSyncedAt=Date.now();
+  vm.runInContext('renderWhatsappPage=()=>{};api=async path=>{recordCall(path);return {data:[]};}',context);
+  await Promise.all([vm.runInContext('ensureWhatsappMetadata()',context),vm.runInContext('ensureWhatsappMetadata()',context)]);
+  assert.equal(calls.length,4);assert.ok(wa.metadataAt>0);
+  await vm.runInContext('ensureWhatsappMetadata()',context);assert.equal(calls.length,4);
+});
+
+test('all filter badges agree with their matching lists including archived conversations',()=>{
+  const items=Array.from({length:80},(_,i)=>({conversationId:String(i),lastInboundAt:new Date(Date.now()-i*3600000),unreadCount:i%4,preferences:{archived:i%7===0,manualUnread:i%9===0},assignedTo:i%2?'a':'b',nextFollowUpAt:i%3?new Date():null,contact:{companyName:'Client '+i,tags:i%2?['IMPORTANT']:[]},lead:{interestLevel:i%2?'HIGH':'LOW',leadStatus:i%3?'FOLLOW_UP':'QUOTATION_SENT'}}));
+  for(const options of [{},{ownerFilter:'a'},{search:'Client 1'},{tagFilter:'IMPORTANT'}]){
+    for(const [filter,count] of Object.entries(inboxCounts(items,options))){
+      if(filter!=='messages')assert.equal(count,items.filter(item=>inboxMatches(item,{...options,filter})).length,filter);
+    }
+  }
+});
+
+test('marketing pagination still drains all saved batches independently of inbox progress',async()=>{
+  const {context}=createHarness();let page=0;
+  context.batchPage=()=>({data:[{campaignId:'batch'+(++page)}],pagination:{hasMore:page<2,nextCursor:page<2?'next':null}});
+  vm.runInContext('api=async()=>batchPage()',context);
+  const result=await vm.runInContext("loadAllBatchPages('/campaigns?limit=100')",context);
+  assert.equal(result.error,null);assert.equal(result.data.length,2);
 });
