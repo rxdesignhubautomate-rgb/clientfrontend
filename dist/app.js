@@ -25,6 +25,7 @@ document.querySelector("#logout-button").addEventListener("click", logout);
 document.querySelector("#menu-button").addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
 window.addEventListener("hashchange", renderRoute);
 document.addEventListener("visibilitychange", resumeWhatsappPolling);
+document.addEventListener("visibilitychange", resumeMarketingProgress);
 
 if (state.session?.accessToken) boot();
 else {
@@ -117,8 +118,10 @@ function logout() {
 async function api(path, options = {}) {
   if (!state.session) throw new Error("Authentication required");
   if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
+  const requestSession = state.session;
   const response = await fetch(`${config.apiBaseUrl}${path}`, {
     ...options,
+    signal: options.signal || AbortSignal.timeout(options.method && options.method !== "GET" ? 60_000 : 30_000),
     headers: {
       authorization: `Bearer ${state.session.accessToken}`,
       "content-type": "application/json",
@@ -127,6 +130,7 @@ async function api(path, options = {}) {
     body: options.body && typeof options.body !== "string" ? JSON.stringify(options.body) : options.body
   });
   const payload = await response.json().catch(() => ({}));
+  if (!state.session || state.session.userId !== requestSession.userId || state.session.email !== requestSession.email) throw new Error("Session changed. Please try again.");
   if (response.status === 401) logout();
   if (!response.ok) throw new Error(payload.error?.message || payload.message || `Request failed (${response.status})`);
   return payload;
@@ -226,6 +230,16 @@ async function fetchAttachmentBlobUncached(attachmentId, { download = false } = 
 }
 
 async function refreshSession() {
+  const session = state.session;
+  if (refreshSession.pending?.session === session) return refreshSession.pending.promise;
+  const promise = performSessionRefresh(session);
+  const pending = { session, promise };
+  refreshSession.pending = pending;
+  try { return await promise; }
+  finally { if (refreshSession.pending === pending) refreshSession.pending = null; }
+}
+
+async function performSessionRefresh(session) {
   if (!state.session?.refreshToken) {
     logout();
     throw new Error("Session expired. Please sign in again.");
@@ -233,9 +247,11 @@ async function refreshSession() {
   const response = await fetch(`${config.apiBaseUrl}/auth/password/refresh`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ refreshToken: state.session.refreshToken })
+    signal: AbortSignal.timeout(30_000),
+    body: JSON.stringify({ refreshToken: session.refreshToken })
   });
   const payload = await response.json().catch(() => ({}));
+  if (state.session !== session) throw new Error("Session changed. Please try again.");
   if (!response.ok) {
     logout();
     throw new Error(readApiError(payload));
@@ -254,6 +270,7 @@ async function refreshSession() {
 }
 
 async function renderRoute() {
+  stopMarketingProgress();
   if (!state.session) return;
   stopWhatsappPolling();
   document.querySelector(".sidebar").classList.remove("open");
@@ -335,7 +352,7 @@ async function renderWhatsapp(requestedConversationId) {
     refreshedId=id;
     try {
       await loadWhatsappConversation(id, {incremental:wa.messagesConversationId === id && wa.messages.length > 0});
-      if (current() && wa.selectedId === id) renderWhatsappPage();
+      if (current() && wa.selectedId === id) renderWhatsappBackground();
     } catch (error) {
       if (current()) { wa.syncState='offline'; updateWhatsappSyncBadge(); notify(error.message, true); }
     }
@@ -386,7 +403,7 @@ async function renderWhatsapp(requestedConversationId) {
     wa.selectedId=conversationId(wa.conversations[0]);wa.messages=[];wa.overview=null;wa.messagesConversationId=null;
   }
   if(wa.selectedId !== refreshedId)await refreshSelected();
-  if(current())renderWhatsappPage();
+  if(current())renderWhatsappBackground();
 }
 
 function ensureWhatsappMetadata() {
@@ -403,7 +420,7 @@ function ensureWhatsappMetadata() {
     wa.metadataAt=Date.now();
     const metadata={templates:wa.templates,quickReplies:wa.quickReplies,users:wa.users,capabilities:wa.capabilities};
     queueWhatsappCache(wa,()=>chatCacheCall(wa.cache,'setMeta','inboxMetadata',metadata));
-    if(location.hash.startsWith('#whatsapp'))renderWhatsappPage();
+    if(location.hash.startsWith('#whatsapp'))renderWhatsappBackground();
   }).catch(error=>console.warn('Inbox metadata unavailable',error)).finally(()=>{wa.metadataRequest=null;});
   return wa.metadataRequest;
 }
@@ -483,7 +500,18 @@ async function optionalInboxApi(path, fallback) {
   }
 }
 
-async function loadWhatsappConversation(id, { incremental = false } = {}) {
+async function loadWhatsappConversation(id, options = {}) {
+  const wa = state.whatsapp;
+  const key = `${wa.navigationVersion}:${id}`;
+  if (wa.messageRequest?.key === key) return wa.messageRequest.promise;
+  const promise = fetchWhatsappConversation(id, options);
+  const pending = { key, promise };
+  wa.messageRequest = pending;
+  try { return await promise; }
+  finally { if (wa.messageRequest === pending) wa.messageRequest = null; }
+}
+
+async function fetchWhatsappConversation(id, { incremental = false } = {}) {
   const wa = state.whatsapp;
   const navigation=wa.navigationVersion;
   const selected = wa.conversations.find((item) => conversationId(item) === id);
@@ -497,36 +525,39 @@ async function loadWhatsappConversation(id, { incremental = false } = {}) {
   const hasBaseline = incremental && sameConversation && wa.messages.length > 0;
   const query = new URLSearchParams({ limit: "100", sortOrder: hasBaseline ? "asc" : "desc" });
   if (hasBaseline) {
-    const latest = Math.max(...wa.messages.map((item) => asDate(item.createdAt)?.getTime() || 0));
+    const latest = Math.max(0, ...wa.messages.filter(item => !item.clientAcknowledged).map((item) => asDate(item.createdAt)?.getTime() || 0));
     if (latest) query.set("from", new Date(Math.max(0, latest - WHATSAPP_SYNC_OVERLAP_MS)).toISOString());
   }
-  const requests = [hasBaseline ? inboxAllPages(`/conversations/${encodeURIComponent(id)}/messages?${query}`) : api(`/conversations/${encodeURIComponent(id)}/messages?${query}`)];
   const overviewIsStale = !wa.overviewCachedAt || Date.now() - wa.overviewCachedAt > 5 * 60 * 1000;
-  if (!wa.overview || wa.overview.contact?.contactId !== selected.contactId || overviewIsStale) {
-    requests.push(api(`/contacts/${encodeURIComponent(selected.contactId)}/overview`));
+  if ((!wa.overview || wa.overview.contact?.contactId !== selected.contactId || overviewIsStale)
+      && wa.overviewRequest?.key !== `${navigation}:${id}`) {
+    const pending = { key: `${navigation}:${id}` };
+    wa.overviewRequest = pending;
+    pending.promise = api(`/contacts/${encodeURIComponent(selected.contactId)}/overview`).then(result => {
+      if (state.whatsapp !== wa || wa.navigationVersion !== navigation || wa.selectedId !== id) return;
+      wa.overview = result.data; wa.overviewCachedAt = Date.now();
+      selectDefaultWhatsappOrder(); prefillUtilityValues(false);
+      queueWhatsappCache(wa, () => chatCacheCall(wa.cache, "putOverview", selected.contactId, result.data));
+      rememberWhatsappConversation(); renderWhatsappBackground();
+    }).catch(error => console.warn('Client overview unavailable; messages remain usable', error))
+      .finally(() => { if (wa.overviewRequest === pending) wa.overviewRequest = null; });
   }
-  const [messageResult, overviewResult] = await Promise.all(requests);
+  const messageResult = await (hasBaseline ? inboxAllPages(`/conversations/${encodeURIComponent(id)}/messages?${query}`) : api(`/conversations/${encodeURIComponent(id)}/messages?${query}`));
   if (state.whatsapp !== wa || wa.navigationVersion !== navigation || wa.selectedId !== id) return [];
   if (!hasBaseline) wa.olderCursor = messageResult.pagination?.hasMore ? messageResult.pagination.nextCursor : null;
+  const previous = new Map(wa.messages.map(message => [message.messageId || message.id, JSON.stringify(message)]));
   const incoming = hasBaseline ? messageResult.data : [...messageResult.data].reverse();
+  const changed = incoming.filter(message => previous.get(message.messageId || message.id) !== JSON.stringify(message));
   wa.messages = (hasBaseline ? mergeById(wa.messages, incoming, "messageId") : incoming)
     .sort((left, right) => (asDate(left.createdAt)?.getTime() || 0) - (asDate(right.createdAt)?.getTime() || 0));
   wa.messagesConversationId = id;
-  if (overviewResult) {
-    wa.overview = overviewResult.data;
-    wa.overviewCachedAt = Date.now();
-  }
   wa.selectedId = id;
   selectDefaultWhatsappOrder();
   syncWhatsappComposerMode({ conversationChanged: !sameConversation });
   prefillUtilityValues(false);
-  const overview=wa.overview;
-  queueWhatsappCache(wa,()=>Promise.all([
-    chatCacheCall(wa.cache, "putMessages", incoming),
-    overviewResult ? chatCacheCall(wa.cache, "putOverview", selected.contactId, overview) : Promise.resolve()
-  ]));
+  if (changed.length) queueWhatsappCache(wa, () => chatCacheCall(wa.cache, "putMessages", changed));
   rememberWhatsappConversation();
-  return incoming;
+  return changed;
 }
 
 function selectDefaultWhatsappOrder() {
@@ -613,8 +644,7 @@ function whatsappChatMarkup(conversation, draftText) {
       </header>
       <details class="ref-chat-tools" ${wa.messageSearch || wa.starredOnly ? "open" : ""}><summary>Chat tools</summary>${smartChatToolbar()}</details>
       <div class="wa-message-list" id="wa-message-list">
-        <div class="wa-day-chip">Conversation history</div>${wa.olderCursor ? '<button class="wa-load-older" id="wa-load-older" type="button">Load earlier messages</button>' : ""}
-        ${wa.messages.length ? wa.messages.map(waMessage).join("") : '<div class="wa-chat-empty">No messages yet. Use a Utility template to start this conversation.</div>'}
+        ${whatsappMessagesMarkup()}
       </div>
       ${waComposer(windowStatus, draftText)}
     </section>
@@ -708,7 +738,7 @@ function waConversationList() {
   }).join("") + (items.length>wa.listLimit ? `<button id="wa-load-more-chats" class="wa-load-older" type="button">Show more chats (${formatCount(items.length-wa.listLimit)} remaining)</button>` : "");
 }
 
-function waMessage(message) {
+function waMessage(message, visibleIds = null) {
   const internal = message.direction === "INTERNAL";
   const outbound = message.direction === "OUTBOUND";
   const status = outbound ? messageStatusMarkup(message.status) : "";
@@ -723,7 +753,7 @@ function waMessage(message) {
   const body = message.type === "REACTION"
     ? `<div class="wa-reaction-message">${esc(message.text || "♡")}</div>`
     : `${waStructuredMessage(message)}${mediaBody}${message.text ? `<p>${linkify(message.text)}</p>` : (!attachments.length && !recoverableMedia && !waHasStructuredBody(message) ? `<p>[${esc(pretty(message.type))}]</p>` : "")}`;
-  return `<div class="wa-message-row ${outbound ? "outbound" : internal ? "internal" : "inbound"}" data-message-row="${attr(message.messageId)}" ${smartVisibleMessages().some(item => item.messageId === message.messageId) ? "" : "hidden"}>
+  return `<div class="wa-message-row ${outbound ? "outbound" : internal ? "internal" : "inbound"}" data-message-row="${attr(message.messageId)}" ${(visibleIds ? visibleIds.has(message.messageId) : smartVisibleMessages().some(item => item.messageId === message.messageId)) ? "" : "hidden"}>
     <div class="wa-bubble">
       ${quoted ? `<div class="wa-quoted"><small>${quoted.direction === "INBOUND" ? "Customer" : "RX team"}</small><p>${esc(quoted.text || `[${pretty(quoted.type)}]`)}</p></div>` : ""}
       ${body}
@@ -891,6 +921,7 @@ function bindWhatsappEvents() {
 }
 
 function bindWhatsappMessageEvents() {
+  bindWhatsappOlderMessages();
   bindSmartMessageTools();
   bindMediaEvents();
   document.querySelectorAll("[data-reply-message]").forEach((button) => button.addEventListener("click", () => {
@@ -1072,6 +1103,10 @@ async function sendWhatsappMessage(event) {
   const sendingId = wa.selectedId;
   const sendingOrderId = wa.selectedOrderId;
   const button = event.submitter;
+  wa.sendingConversations ||= new Set();
+  if (wa.sendingConversations.has(sendingId)) return;
+  wa.sendingConversations.add(sendingId);
+  const typedAtSubmit = document.querySelector('#wa-message-input')?.value || '';
   button.disabled = true;
   try {
     let body;
@@ -1110,20 +1145,33 @@ async function sendWhatsappMessage(event) {
     if (sendResult?.queued !== true && sendResult?.sent !== true) {
       throw new Error(policyFailureMessage(sendResult?.reason));
     }
+    if (state.whatsapp !== wa) return;
     delete wa.pendingSends[sendingId];
-    clearTimeout(wa.draftTimers[sendingId]);
-    await chatCacheCall(wa.cache,"setMeta",`draft:${sendingId}`,"");
-    wa.drafts[sendingId] = "";
-    await saveSmartPreference({ draft: "" }, sendingId).catch(() => {});
+    const input = sendingId === wa.selectedId ? document.querySelector('#wa-message-input') : null;
+    const unchanged = input ? input.value === typedAtSubmit : (wa.drafts[sendingId] || '') === typedAtSubmit;
+    if (unchanged) {
+      clearTimeout(wa.draftTimers[sendingId]); wa.drafts[sendingId] = '';
+      if (input) input.value = '';
+      // Save through the ordered preference queue; do not block the next reply.
+      saveSmartPreference({ draft: '' }, sendingId).catch(() => {});
+    }
     if (sendingId !== wa.selectedId) { notify("Message queued in the original conversation."); return; }
-    wa.replyToMessageId = null;
-    wa.utilityHeaderFile = null;
-    await loadWhatsappConversation(sendingId, { incremental: true });
-    renderWhatsappPage();
+    wa.replyToMessageId = null; wa.utilityHeaderFile = null;
+    document.querySelector('.wa-replying')?.remove();
+    if (sendResult.messageId && body.type === 'TEXT') {
+      const queued = { messageId: sendResult.messageId, conversationId: sendingId, direction: 'OUTBOUND', type: 'TEXT', text: body.text, status: sendResult.sent ? 'SENT' : 'QUEUED', createdAt: new Date().toISOString(), clientAcknowledged: true, replyToMessageId: body.replyToMessageId };
+      if (!wa.messages.some(message => message.messageId === queued.messageId)) wa.messages = mergeById(wa.messages, [queued], 'messageId');
+      // This is a server-acknowledged queue item, not a delivery confirmation.
+      renderWhatsappBackground();
+    }
+    if (sendResult.messageId) refreshWhatsappMessage(sendResult.messageId).then(message => {
+      if (state.whatsapp === wa && wa.selectedId === sendingId && message) renderWhatsappBackground();
+    }).catch(error => console.warn('Queued message will refresh on next sync', error));
     notify(body.type === "TEMPLATE" ? "Utility update queued for WhatsApp." : "Message queued for WhatsApp.");
   } catch (error) {
     notify(error.message, true);
   } finally {
+    wa.sendingConversations.delete(sendingId);
     if (document.body.contains(button)) {
       button.disabled = false;
       if (button.classList.contains("wa-send-template")) button.textContent = "Send Utility update";
@@ -1615,22 +1663,26 @@ async function toggleConversationStatus() {
 }
 
 async function markSelectedConversationRead() {
-  const wa = state.whatsapp;
-  // On phones, the list and chat occupy separate screens. Viewing the list
-  // must not mark an automatically selected, hidden conversation as read.
+  const wa = state.whatsapp, id = wa.selectedId;
   if (window.matchMedia("(max-width: 680px)").matches && !wa.mobileChatOpen) return;
-  if (selectedConversation()?.preferences?.manualUnread) return;
-  const unread = [...wa.messages].reverse().find((item) => item.direction === "INBOUND" && item.status !== "READ");
+  if (!id || selectedConversation()?.preferences?.manualUnread) return;
+  wa.readRequests ||= new Map(); wa.readRetryAt ||= new Map();
+  if (wa.readRequests.has(id) || Date.now() < (wa.readRetryAt.get(id) || 0)) return;
+  const unread = [...wa.messages].reverse().find(item => item.direction === "INBOUND" && item.status !== "READ");
   if (!unread) return;
+  const readIds = new Set(wa.messages.filter(item => item.direction === 'INBOUND').map(item => item.messageId));
+  wa.readRequests.set(id, unread.messageId);
   try {
     const result = await api(`/messages/${encodeURIComponent(unread.messageId)}/mark-read`, { method: "POST", body: {} });
-    wa.messages.filter((item) => item.direction === "INBOUND").forEach((item) => { item.status = "READ"; });
+    if (state.whatsapp !== wa || wa.selectedId !== id) return;
+    wa.messages.filter(item => readIds.has(item.messageId)).forEach(item => { item.status = "READ"; });
     const conversation = selectedConversation();
-    if (conversation) conversation.unreadCount = result.data?.conversationUnreadCount || 0;
-    updateWhatsappFilterCounts();
-    const list = document.querySelector("#wa-conversation-list");
-    if (list) { list.innerHTML = waConversationList(); bindConversationRows(); }
-  } catch { /* The message remains unread and can be retried on the next open. */ }
+    const arrivedAfterRequest = wa.messages.filter(item => item.direction === 'INBOUND' && !readIds.has(item.messageId) && item.status !== 'READ').length;
+    if (conversation) conversation.unreadCount = Math.max(Number(result.data?.conversationUnreadCount || 0), arrivedAfterRequest);
+    wa.readRetryAt.delete(id);
+    refreshWhatsappLiveDom();
+  } catch { wa.readRetryAt.set(id, Date.now() + 30_000); }
+  finally { wa.readRequests.delete(id); }
 }
 
 function startWhatsappPolling() {
@@ -1657,6 +1709,15 @@ async function pollWhatsapp() {
   const previousUnread = new Map(wa.conversations.map((item) => [conversationId(item), Number(item.unreadCount || 0)]));
   try {
     const syncStartedAt = Date.now();
+    const selectedId = wa.selectedId;
+    const selectedRefresh = selectedId ? loadWhatsappConversation(selectedId, { incremental: true })
+      .then(incoming => {
+        if (state.whatsapp === wa && wa.selectedId === selectedId && location.hash.startsWith('#whatsapp') && incoming.length) {
+          renderWhatsappBackground();
+          if (incoming.some(item => item.direction === 'INBOUND')) markSelectedConversationRead();
+        }
+        return incoming;
+      }).catch(error => { console.warn('Selected chat refresh failed', error); return []; }) : Promise.resolve([]);
     const from = new Date(Math.max(0, Number(wa.syncedAt || syncStartedAt) - WHATSAPP_SYNC_OVERLAP_MS)).toISOString();
     const full = !wa.fullSyncedAt || syncStartedAt - wa.fullSyncedAt > 15 * 60_000;
     const result = await inboxAllPages(full ? "/conversations?limit=100&sortBy=updatedAt&sortOrder=asc" : `/conversations?limit=100&from=${encodeURIComponent(from)}&sortBy=updatedAt&sortOrder=asc`);
@@ -1672,8 +1733,8 @@ async function pollWhatsapp() {
       for(const id of wa.recentChats.keys())if(!ids.has(id))wa.recentChats.delete(id);
     }
     if (wa.selectedId && !selectedConversation()) { wa.selectedId = null; wa.messages = []; wa.overview = null; renderWhatsappPage(); }
-    let incoming = [];
-    if (selectedChanged) incoming = await loadWhatsappConversation(wa.selectedId, { incremental: true }) || [];
+    const incoming = await selectedRefresh;
+    if (state.whatsapp !== wa) return;
     const markerUpdates = selectedChanged
       ? await refreshChangedMessageMarkers(whatsappUpdates, new Set(incoming.map((item) => item.messageId || item.id)))
       : [];
@@ -1727,8 +1788,9 @@ async function refreshChangedMessageMarkers(conversationUpdates, loadedMessageId
 }
 
 async function refreshWhatsappMessage(messageId, { cacheOnly = false } = {}) {
+  const wa = state.whatsapp, navigation = wa.navigationVersion;
   const message = (await api(`/messages/${encodeURIComponent(messageId)}`)).data;
-  if (!message || message.conversationId !== state.whatsapp.selectedId) return null;
+  if (state.whatsapp !== wa || navigation !== wa.navigationVersion || !message || message.conversationId !== wa.selectedId) return null;
   if (cacheOnly) return message;
   state.whatsapp.messages = mergeById(state.whatsapp.messages, [message], "messageId")
     .sort((left, right) => (asDate(left.createdAt)?.getTime() || 0) - (asDate(right.createdAt)?.getTime() || 0));
@@ -1746,7 +1808,69 @@ function refreshWhatsappLiveDom({ messagesChanged = false } = {}) {
     bindConversationRows();
     restoreScrollAnchor(list, listViewport, ".wa-conversation", "conversationId");
   }
-  if (messagesChanged) renderWhatsappPage();
+  if (messagesChanged) renderWhatsappBackground();
+}
+
+// Background responses must not replace an editor while the user is typing.
+// Keeping the original node also preserves selection, undo and IME composition.
+function renderWhatsappBackground() {
+  if (!location.hash.startsWith('#whatsapp')) return;
+  const active = document.activeElement;
+  const panel = document.querySelector('[data-chat-conversation-id]');
+  const sameChat = (panel?.dataset.chatConversationId || null) === (state.whatsapp.selectedId || null);
+  // A mouse press focuses its button before click fires. Preserve that target
+  // too, so a deferred editor blur refresh cannot swallow the Send click.
+  const editing = active?.matches?.('input, textarea, select, button, a[href], summary, [contenteditable="true"]');
+  if (sameChat && editing) {
+    refreshWhatsappMessagesDom();
+    const wa = state.whatsapp;
+    if (!wa.editorRefreshPending) {
+      wa.editorRefreshPending = true;
+      active.addEventListener('blur', () => {
+        // Allow the clicked button's handler to run before rebuilding controls.
+        setTimeout(() => {
+          wa.editorRefreshPending = false;
+          if (state.whatsapp === wa) renderWhatsappBackground();
+        }, 0);
+      }, { once: true });
+    }
+    return;
+  }
+  renderWhatsappPage();
+}
+
+function whatsappMessagesMarkup() {
+  const wa = state.whatsapp;
+  const visibleIds = new Set(smartVisibleMessages().map(message => message.messageId));
+  return `<div class="wa-day-chip">Conversation history</div>${wa.olderCursor ? '<button class="wa-load-older" id="wa-load-older" type="button">Load earlier messages</button>' : ""}
+    ${wa.messages.length ? wa.messages.map(message => waMessage(message, visibleIds)).join("") : '<div class="wa-chat-empty">No messages yet. Use a Utility template to start this conversation.</div>'}`;
+}
+
+function refreshWhatsappMessagesDom() {
+  const body = document.querySelector('#wa-message-list');
+  if (!body) return;
+  const viewport = captureWhatsappViewport();
+  releaseMediaObjectUrls();
+  body.innerHTML = whatsappMessagesMarkup();
+  bindWhatsappMessageEvents();
+  const count = document.querySelector('#wa-search-match-count');
+  if (count) count.textContent = `${smartVisibleMessages().length} messages`;
+  restoreWhatsappViewport(viewport, state.whatsapp.selectedId);
+  installWhatsappMediaScrollStability(body);
+}
+
+function bindWhatsappOlderMessages() {
+  document.querySelector('#wa-load-older')?.addEventListener('click', async event => {
+    const wa = state.whatsapp;
+    try {
+    const id = wa.selectedId; event.currentTarget.disabled = true;
+    const { data, pagination } = await api(`/conversations/${encodeURIComponent(id)}/messages?limit=100&sortOrder=desc&cursor=${encodeURIComponent(wa.olderCursor)}`);
+    if (id !== wa.selectedId) return;
+    wa.messages = mergeById(wa.messages,data,'messageId').sort((a,b) => asDate(a.createdAt) - asDate(b.createdAt));
+    wa.olderCursor = pagination?.hasMore ? pagination.nextCursor : null;
+    await chatCacheCall(wa.cache,'putMessages',data); renderWhatsappBackground();
+    } catch (error) { notify(error.message, true); event.currentTarget?.removeAttribute('disabled'); }
+  });
 }
 
 function captureWhatsappViewport() {
@@ -2096,6 +2220,7 @@ function segmentOptions() {
 const ORDER_STATUSES = ["CONFIRMED", "IN_DESIGN", "DESIGN_READY", "IN_PRODUCTION", "READY_TO_DISPATCH", "DISPATCHED", "DELIVERED", "ON_HOLD", "CANCELLED"];
 
 async function renderMarketing() {
+  stopMarketingProgress();
   pageTitle.textContent = "Marketing";
   page.innerHTML = '<div class="empty-state">Loading your batches…</div>';
   const [summary, audiences, campaigns] = await Promise.all([
@@ -2120,18 +2245,91 @@ async function renderMarketing() {
     ${summary.error ? '<div class="form-error">Contact counts could not load. Deploy the updated backend, then refresh.</div>' : ""}
     <section class="panel"><div class="panel-title-row"><div><h3>Your batches</h3><p>Open a batch to check the message and video.</p></div><span class="count-pill">${active.length} batches</span></div>
       ${campaigns.error || audiences.error ? `<div class="form-error">Some batches could not load completely. ${esc(campaigns.error || audiences.error)}</div>` : ""}
+      <p id="marketing-progress-sync" class="muted tiny-note">Batch progress updates automatically.</p>
       <div class="campaign-list">${active.map(simpleCampaignCard).join("") || '<div class="empty-state">No pending batches.</div>'}</div>
     </section>
     ${history.length ? `<details class="panel simple-history"><summary>Past & cancelled batches · ${history.length}</summary><div class="campaign-list">${history.map(simpleCampaignCard).join("")}</div></details>` : ""}
   </div>`;
   document.querySelector("#refresh-marketing").addEventListener("click", renderMarketing);
   document.querySelectorAll("[data-preview-batch]").forEach(button => button.addEventListener("click", () => showSimpleCampaignPreview(button.dataset.previewBatch, button)));
+  startMarketingProgress();
+}
+
+function batchProgress(campaign, audienceCount) {
+  const number = value => Number.isFinite(Number(value)) ? Math.max(0, Math.floor(Number(value))) : 0;
+  const stats = campaign.stats || {};
+  const total = number(stats.total) || number(audienceCount);
+  const queued = number(stats.sent);
+  // Provider failures can overlap queued/completed. Never add failed to sent.
+  const processed = number(stats.total) > 0
+    ? Math.min(total, Math.max(0, number(stats.total) - number(stats.active) - number(stats.waiting))) : 0;
+  const percent = total ? Math.min(processed < total ? 99 : 100, Math.round(processed / total * 100)) : 0;
+  const status = String(campaign.status || 'DRAFT').toUpperCase();
+  const labels = { DRAFT:'Not started', PENDING_APPROVAL:'Awaiting approval', APPROVED:'Ready to send', SCHEDULED:'Scheduled', PAUSED:'Paused', CANCELLED:'Cancelled', FAILED:'Stopped with errors', COMPLETED:'Batch processed' };
+  const label = labels[status] || (number(stats.waiting) && !number(stats.active) ? 'Waiting for replies…' : processed === total && total ? 'Messages queued' : 'Sending messages…');
+  return { total, processed, percent, queued, failed:number(stats.failed), label, stopped:['CANCELLED','FAILED'].includes(status) };
+}
+
+function batchProgressMarkup(campaign, count) {
+  const p = batchProgress(campaign, count);
+  return `<div class="batch-progress-box ${p.stopped ? 'is-stopped' : ''}"><div class="batch-progress-heading"><strong>${esc(p.label)}</strong><b>${formatCount(p.processed)} / ${p.total ? formatCount(p.total) : '—'}</b></div><div class="batch-progress-track" role="progressbar" aria-label="Batch processing progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${p.percent}" aria-valuetext="${p.processed} of ${p.total} contacts processed"><span style="width:${p.percent}%"></span></div><small>${p.percent}% processed · ${formatCount(p.queued)} queued · ${formatCount(p.failed)} failed</small></div>`;
+}
+
+function simpleBatchStats(campaign) {
+  return `<span><strong>${formatCount(campaign.stats?.delivered || 0)}</strong> delivered</span><span><strong>${formatCount(campaign.stats?.read || 0)}</strong> read</span><span><strong>${formatCount(campaign.stats?.replied || 0)}</strong> replied</span>`;
 }
 
 function simpleCampaignCard(campaign) {
   const audience = state.marketing.audiences.find(item => item.audienceId === campaign.audienceId);
   const count = audience?.contactCount ?? campaign.stats?.total;
-  return `<article class="campaign-card simple-batch-card"><div class="campaign-main"><div><strong>${esc(campaign.name)}</strong><small>${count == null ? "Contact count unavailable" : `${formatCount(count)} contacts`} <span>·</span> ${esc(pretty(campaign.status))}</small></div><button class="button button-primary" data-preview-batch="${attr(campaign.campaignId)}">Preview</button></div><div class="simple-batch-stats"><span><strong>${formatCount(campaign.stats?.sent || 0)}</strong> sent</span><span><strong>${formatCount(campaign.stats?.delivered || 0)}</strong> delivered</span><span><strong>${formatCount(campaign.stats?.replied || 0)}</strong> replied</span></div></article>`;
+  return `<article class="campaign-card simple-batch-card" data-batch-card="${attr(campaign.campaignId)}"><div class="campaign-main"><div><strong>${esc(campaign.name)}</strong><small>${count == null ? "Contact count unavailable" : `${formatCount(count)} contacts`} <span>·</span> <span data-batch-status>${esc(pretty(campaign.status))}</span></small></div><button class="button button-primary" data-preview-batch="${attr(campaign.campaignId)}">Preview</button></div><div data-batch-progress>${batchProgressMarkup(campaign, count)}</div><div class="simple-batch-stats">${simpleBatchStats(campaign)}</div></article>`;
+}
+
+function stopMarketingProgress() {
+  if (state.marketing?.progressTimer) clearTimeout(state.marketing.progressTimer);
+  if (state.marketing) {
+    state.marketing.progressTimer = null;
+    state.marketing.progressGeneration = (state.marketing.progressGeneration || 0) + 1;
+  }
+}
+
+function resumeMarketingProgress() {
+  stopMarketingProgress();
+  if (!document.hidden && location.hash === '#marketing') startMarketingProgress();
+}
+
+function startMarketingProgress(delay = 5000) {
+  const marketing = state.marketing;
+  if (!marketing || marketing.progressLoading || marketing.progressTimer || document.hidden || !state.session || location.hash !== '#marketing') return;
+  const generation = marketing.progressGeneration;
+  marketing.progressTimer = setTimeout(async () => {
+    marketing.progressTimer = null; marketing.progressLoading = true;
+    let nextDelay = 5000;
+    try {
+      const result = await loadAllBatchPages('/campaigns?limit=100');
+      if (state.marketing !== marketing || marketing.progressGeneration !== generation || document.hidden || location.hash !== '#marketing' || !state.session) return;
+      if (result.error) throw new Error(result.error);
+      marketing.campaigns = result.data;
+      const campaigns = new Map(result.data.map(item => [item.campaignId, item]));
+      document.querySelectorAll('[data-batch-card]').forEach(card => {
+        const campaign = campaigns.get(card.dataset.batchCard);
+        if (!campaign) return;
+        const count = marketing.audiences.find(item => item.audienceId === campaign.audienceId)?.contactCount;
+        card.querySelector('[data-batch-progress]').innerHTML = batchProgressMarkup(campaign, count);
+        card.querySelector('[data-batch-status]').textContent = pretty(campaign.status);
+        card.querySelector('.simple-batch-stats').innerHTML = simpleBatchStats(campaign);
+      });
+      const note = document.querySelector('#marketing-progress-sync');
+      if (note) note.textContent = `Progress updated ${shortTime(new Date())} · queued messages may still be awaiting delivery.`;
+    } catch {
+      nextDelay = 15000;
+      const note = document.querySelector('#marketing-progress-sync');
+      if (note && state.marketing === marketing) note.textContent = 'Progress refresh failed. Retrying shortly…';
+    } finally {
+      marketing.progressLoading = false;
+      if (state.marketing === marketing) startMarketingProgress(nextDelay);
+    }
+  }, delay);
 }
 
 async function showSimpleCampaignPreview(campaignId, button) {
@@ -3418,14 +3616,6 @@ function bindSmartInbox() {
   };
   on('#wa-message-search','input',event => { wa.messageSearch = event.target.value; search(); });
   on('#wa-starred-only','change',event => { wa.starredOnly = event.target.checked; search(); });
-  on('#wa-load-older','click',run(async event => {
-    const id = wa.selectedId; event.currentTarget.disabled = true;
-    const { data, pagination } = await api(`/conversations/${encodeURIComponent(id)}/messages?limit=100&sortOrder=desc&cursor=${encodeURIComponent(wa.olderCursor)}`);
-    if (id !== wa.selectedId) return;
-    wa.messages = mergeById(wa.messages,data,'messageId').sort((a,b) => asDate(a.createdAt) - asDate(b.createdAt));
-    wa.olderCursor = pagination?.hasMore ? pagination.nextCursor : null;
-    await chatCacheCall(wa.cache,'putMessages',data); renderWhatsappPage();
-  }));
   on('#wa-ai-suggest','click',run(async event => {
     const button = event.currentTarget; const id = wa.selectedId; button.disabled = true; button.textContent = 'Thinking…';
     try {
