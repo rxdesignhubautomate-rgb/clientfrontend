@@ -1,3 +1,4 @@
+import { patchMarkup, patchNode, bindLiveEvent } from "./dom-patch.mjs";
 import { createChatCache } from "./chat-cache.js";
 import { uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners } from "./inbox-style.js";
 
@@ -290,6 +291,7 @@ async function renderRoute() {
   try {
     if (base === "whatsapp") await renderWhatsapp(route[1]);
     else if (base === "marketing") await renderMarketing();
+    else if (base === "quotations") await renderQuotations();
     else if (base === "clients") await renderClients();
     else if (base === "client" && route[1]) await renderClient(route[1]);
     else if (base === "import") await renderImport();
@@ -636,6 +638,7 @@ function whatsappChatMarkup(conversation, draftText) {
         <div class="wa-chat-actions">
           <span class="wa-window ${windowStatus.open ? "open" : "closed"}">${windowStatus.open ? `Free reply · ${esc(windowStatus.remaining)}` : "Approved template required"}</span>
           ${contact.primaryPhone ? `<a class="wa-icon-button" href="tel:+${attr(contact.primaryPhone)}" title="Call customer" aria-label="Call customer">${uiIcon("phone")}</a>` : ""}
+          <button id="wa-create-quotation" class="button button-secondary" type="button">Quotation</button>
           <button id="wa-reference-search" class="wa-icon-button" type="button" aria-label="Search this conversation">${uiIcon("search")}</button>
           <button class="wa-icon-button wa-details-button" id="wa-toggle-client-panel" type="button" title="Client workspace" aria-label="Client workspace" aria-expanded="${wa.clientPanelOpen}" aria-controls="wa-client-workspace">${uiIcon("info")}</button>
           <button class="wa-icon-button ${important ? "important" : ""}" id="wa-toggle-important" title="${important ? "Remove Important" : "Mark Important"}">${uiIcon("star")}</button>
@@ -821,13 +824,14 @@ function waHasStructuredBody(message) {
 }
 
 function bindWhatsappEvents() {
+  bindLiveEvent(document.querySelector("#wa-create-quotation"), "binding-54764", "click",openCurrentQuotation);
   bindSmartInbox();
-  document.querySelector("#wa-search")?.addEventListener("input", (event) => {
+  bindLiveEvent(document.querySelector("#wa-search"), "binding-54884", "input", (event) => {
     state.whatsapp.search = event.target.value;
     state.whatsapp.listLimit=100;
     refreshWhatsappLiveDom();
   });
-  document.querySelector(".wa-inbox-tools")?.addEventListener("click", (event) => {
+  bindLiveEvent(document.querySelector(".wa-inbox-tools"), "binding-55086", "click", (event) => {
     const filterButton = event.target.closest("[data-wa-filter]");
     const ownerButton = event.target.closest("[data-wa-owner]");
     if (filterButton) state.whatsapp.filter = filterButton.dataset.waFilter;
@@ -835,80 +839,80 @@ function bindWhatsappEvents() {
     else return;
     refreshWhatsappLiveDom();
   });
-  document.querySelector("#wa-label-filter")?.addEventListener("change", (event) => {
+  bindLiveEvent(document.querySelector("#wa-label-filter"), "binding-55590", "change", (event) => {
     state.whatsapp.tagFilter = event.target.value;
     refreshWhatsappLiveDom();
   });
-  document.querySelector("#wa-menu-button")?.addEventListener("click", () => document.querySelector(".sidebar").classList.toggle("open"));
+  bindLiveEvent(document.querySelector("#wa-menu-button"), "binding-55767", "click", () => document.querySelector(".sidebar").classList.toggle("open"));
   bindConversationRows();
-  document.querySelectorAll("[data-wa-mode]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-wa-mode]").forEach((button) => bindLiveEvent(button, "binding-55998", "click", () => {
     state.whatsapp.mode = button.dataset.waMode;
     state.whatsapp.composerModeTouched = true;
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
   }));
-  document.querySelector("#wa-template-select")?.addEventListener("change", (event) => {
+  bindLiveEvent(document.querySelector("#wa-template-select"), "binding-56231", "change", (event) => {
     state.whatsapp.templateId = event.target.value;
     state.whatsapp.templateValues = {};
     state.whatsapp.utilityHeaderFile = null;
     prefillUtilityValues(true);
     renderWhatsappPage();
   });
-  document.querySelector("#wa-sync-templates")?.addEventListener("click", syncUtilityTemplates);
-  document.querySelector("#wa-template-order")?.addEventListener("change", (event) => {
+  bindLiveEvent(document.querySelector("#wa-sync-templates"), "binding-56528", "click", syncUtilityTemplates);
+  bindLiveEvent(document.querySelector("#wa-template-order"), "binding-56626", "change", (event) => {
     state.whatsapp.selectedOrderId = event.target.value || null;
     state.whatsapp.templateValues = {};
     state.whatsapp.utilityHeaderFile = null;
     prefillUtilityValues(true);
     renderWhatsappPage();
   });
-  document.querySelectorAll("[data-template-field]").forEach((input) => input.addEventListener("input", () => {
+  document.querySelectorAll("[data-template-field]").forEach((input) => bindLiveEvent(input, "binding-57005", "input", () => {
     state.whatsapp.templateValues[input.dataset.templateField] = input.value;
     const preview = document.querySelector(".wa-template-preview p");
     if (preview) preview.textContent = renderUtilityPreview(selectedUtilityTemplate(), state.whatsapp.templateValues);
   }));
-  document.querySelector("#wa-template-header-file")?.addEventListener("change", (event) => {
+  bindLiveEvent(document.querySelector("#wa-template-header-file"), "binding-57326", "change", (event) => {
     const file = event.target.files?.[0] || null;
     state.whatsapp.utilityHeaderFile = file;
     const label = document.querySelector("#wa-template-header-name");
     if (label) label.textContent = file?.name || "No file selected";
   });
-  document.querySelector("#wa-composer-form")?.addEventListener("submit", sendWhatsappMessage);
-  document.querySelector("#wa-toggle-status")?.addEventListener("click", toggleConversationStatus);
-  document.querySelector("#wa-toggle-client-panel")?.addEventListener("click", () => {
+  bindLiveEvent(document.querySelector("#wa-composer-form"), "binding-57666", "submit", sendWhatsappMessage);
+  bindLiveEvent(document.querySelector("#wa-toggle-status"), "binding-57763", "click", toggleConversationStatus);
+  bindLiveEvent(document.querySelector("#wa-toggle-client-panel"), "binding-57864", "click", () => {
     state.whatsapp.clientPanelOpen = !state.whatsapp.clientPanelOpen;
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
   });
-  document.querySelector("#wa-close-client-panel")?.addEventListener("click", () => {
+  bindLiveEvent(document.querySelector("#wa-close-client-panel"), "binding-58113", "click", () => {
     state.whatsapp.clientPanelOpen = false;
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
   });
-  document.querySelector("#wa-toggle-important")?.addEventListener("click", toggleImportantContact);
-  document.querySelector("#wa-enable-alerts")?.addEventListener("click", enableDesktopAlerts);
-  document.querySelector("#wa-quick-reply")?.addEventListener("change", selectQuickReply);
-  document.querySelector("#wa-attachment-input")?.addEventListener("change", sendSelectedAttachment);
+  bindLiveEvent(document.querySelector("#wa-toggle-important"), "binding-58335", "click", toggleImportantContact);
+  bindLiveEvent(document.querySelector("#wa-enable-alerts"), "binding-58437", "click", enableDesktopAlerts);
+  bindLiveEvent(document.querySelector("#wa-quick-reply"), "binding-58533", "change", selectQuickReply);
+  bindLiveEvent(document.querySelector("#wa-attachment-input"), "binding-58625", "change", sendSelectedAttachment);
   bindWhatsappMessageEvents();
-  document.querySelector("#wa-record-audio")?.addEventListener("click", toggleVoiceRecording);
-  document.querySelector("#wa-share-location")?.addEventListener("click", shareCurrentLocation);
-  document.querySelector("#wa-share-contact")?.addEventListener("click", shareContactCard);
-  document.querySelector("#wa-interactive-buttons")?.addEventListener("click", sendInteractiveButtons);
-  document.querySelector("#wa-add-internal-note")?.addEventListener("click", addInternalNote);
-  document.querySelector("#wa-cancel-reply")?.addEventListener("click", () => {
+  bindLiveEvent(document.querySelector("#wa-record-audio"), "binding-58760", "click", toggleVoiceRecording);
+  bindLiveEvent(document.querySelector("#wa-share-location"), "binding-58856", "click", shareCurrentLocation);
+  bindLiveEvent(document.querySelector("#wa-share-contact"), "binding-58954", "click", shareContactCard);
+  bindLiveEvent(document.querySelector("#wa-interactive-buttons"), "binding-59047", "click", sendInteractiveButtons);
+  bindLiveEvent(document.querySelector("#wa-add-internal-note"), "binding-59152", "click", addInternalNote);
+  bindLiveEvent(document.querySelector("#wa-cancel-reply"), "binding-59248", "click", () => {
     state.whatsapp.replyToMessageId = null;
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
   });
-  document.querySelector("#wa-assignee")?.addEventListener("change", assignConversation);
-  document.querySelector("#wa-add-tag")?.addEventListener("click", addContactTag);
-  document.querySelectorAll("[data-remove-tag]").forEach((button) => button.addEventListener("click", () => removeContactTag(button.dataset.removeTag)));
-  document.querySelector("#wa-save-notes")?.addEventListener("click", saveCustomerNotes);
-  document.querySelector("#wa-create-followup")?.addEventListener("click", createWhatsappFollowup);
-  document.querySelectorAll("[data-order-status]").forEach((select) => select.addEventListener("change", updateOrderStatus));
-  document.querySelectorAll("[data-select-order]").forEach((card) => card.addEventListener("click", (event) => {
+  bindLiveEvent(document.querySelector("#wa-assignee"), "binding-59464", "change", assignConversation);
+  bindLiveEvent(document.querySelector("#wa-add-tag"), "binding-59555", "click", addContactTag);
+  document.querySelectorAll("[data-remove-tag]").forEach((button) => bindLiveEvent(button, "binding-59706", "click", () => removeContactTag(button.dataset.removeTag)));
+  bindLiveEvent(document.querySelector("#wa-save-notes"), "binding-59794", "click", saveCustomerNotes);
+  bindLiveEvent(document.querySelector("#wa-create-followup"), "binding-59885", "click", createWhatsappFollowup);
+  document.querySelectorAll("[data-order-status]").forEach((select) => bindLiveEvent(select, "binding-60055", "change", updateOrderStatus));
+  document.querySelectorAll("[data-select-order]").forEach((card) => bindLiveEvent(card, "binding-60180", "click", (event) => {
     if (event.target.closest("select,button")) return;
     state.whatsapp.selectedOrderId = card.dataset.selectOrder;
     prefillUtilityValues(true);
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
   }));
-  document.querySelectorAll("[data-prepare-template]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-prepare-template]").forEach((button) => bindLiveEvent(button, "binding-60544", "click", () => {
     state.whatsapp.mode = "TEMPLATE";
     state.whatsapp.composerModeTouched = true;
     state.whatsapp.templateId = button.dataset.prepareTemplate;
@@ -924,34 +928,34 @@ function bindWhatsappMessageEvents() {
   bindWhatsappOlderMessages();
   bindSmartMessageTools();
   bindMediaEvents();
-  document.querySelectorAll("[data-reply-message]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-reply-message]").forEach((button) => bindLiveEvent(button, "binding-61154", "click", () => {
     state.whatsapp.replyToMessageId = button.dataset.replyMessage;
     renderWhatsappPage(document.querySelector("#wa-message-input")?.value || "");
     document.querySelector("#wa-message-input")?.focus();
   }));
-  document.querySelectorAll("[data-react-message]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-react-message]").forEach((button) => bindLiveEvent(button, "binding-61486", "click", () => {
     sendReaction(button.dataset.reactMessage, button.dataset.reactEmoji, button);
   }));
-  document.querySelectorAll("[data-retry-message]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-retry-message]").forEach((button) => bindLiveEvent(button, "binding-61691", "click", () => {
     retryWhatsappMessage(button.dataset.retryMessage, button);
   }));
 }
 
 function bindMediaEvents() {
-  document.querySelectorAll("[data-retry-media]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-retry-media]").forEach((button) => bindLiveEvent(button, "binding-61910", "click", () => {
     retryWhatsappMedia(button.dataset.retryMedia, button);
   }));
-  document.querySelectorAll("[data-media-open]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-media-open]").forEach((button) => bindLiveEvent(button, "binding-62089", "click", () => {
     openProtectedAttachment(button.dataset.mediaOpen, button.dataset.mediaName, button);
   }));
-  document.querySelectorAll("[data-media-preview]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-media-preview]").forEach((button) => bindLiveEvent(button, "binding-62301", "click", () => {
     openImageViewer(button.dataset.mediaPreview, button.dataset.mediaName, button);
   }));
-  document.querySelectorAll("[data-media-download]").forEach((button) => button.addEventListener("click", () => {
+  document.querySelectorAll("[data-media-download]").forEach((button) => bindLiveEvent(button, "binding-62509", "click", () => {
     downloadProtectedAttachment(button.dataset.mediaDownload, button.dataset.mediaName, button);
   }));
   document.querySelectorAll("[data-protected-media]").forEach((element) => {
-    element.addEventListener("error", () => hydrateProtectedMedia(element), { once: true });
+    bindLiveEvent(element, "binding-62739", "error", () => hydrateProtectedMedia(element), { once: true });
   });
 }
 
@@ -1087,8 +1091,8 @@ function releaseMediaObjectUrls() {
 }
 
 function bindConversationRows() {
-  document.querySelector('#wa-load-more-chats')?.addEventListener('click',()=>{state.whatsapp.listLimit+=100;refreshWhatsappLiveDom();});
-  document.querySelectorAll("[data-conversation-id]").forEach((button) => button.addEventListener("click", () => {
+  bindLiveEvent(document.querySelector('#wa-load-more-chats'), "binding-67915", 'click',()=>{state.whatsapp.listLimit+=100;refreshWhatsappLiveDom();});
+  document.querySelectorAll("[data-conversation-id]").forEach((button) => bindLiveEvent(button, "binding-68126", "click", () => {
     saveSmartDraft();
     state.whatsapp.messageSearch = ""; state.whatsapp.starredOnly = false;
     state.whatsapp.clientPanelOpen = false;
@@ -1724,7 +1728,9 @@ async function pollWhatsapp() {
     if (state.whatsapp !== wa) return;
     const whatsappUpdates = result.data.filter((item) => item.currentChannel === "WHATSAPP");
     for (const item of whatsappUpdates) if (!wa.draftDirty.has(conversationId(item))) wa.drafts[conversationId(item)] = item.preferences?.draft || "";
-    const selectedChanged = whatsappUpdates.some((item) => conversationId(item) === wa.selectedId);
+    const previousConversations = new Map(wa.conversations.map(item => [conversationId(item), JSON.stringify(item)]));
+    const changedConversations = whatsappUpdates.filter(item => previousConversations.get(conversationId(item)) !== JSON.stringify(item));
+    const selectedChanged = changedConversations.some((item) => conversationId(item) === wa.selectedId);
     const newlyUnread = whatsappUpdates.filter((item) => Number(item.unreadCount || 0) > Number(previousUnread.get(conversationId(item)) || 0));
     wa.conversations = sortWhatsappConversations(full ? whatsappUpdates : mergeById(wa.conversations, whatsappUpdates, "conversationId"));
     if (full) {
@@ -1736,19 +1742,18 @@ async function pollWhatsapp() {
     const incoming = await selectedRefresh;
     if (state.whatsapp !== wa) return;
     const markerUpdates = selectedChanged
-      ? await refreshChangedMessageMarkers(whatsappUpdates, new Set(incoming.map((item) => item.messageId || item.id)))
+      ? await refreshChangedMessageMarkers(changedConversations, new Set(incoming.map((item) => item.messageId || item.id)))
       : [];
     wa.syncedAt = asDate(result.meta?.syncStartedAt)?.getTime() || syncStartedAt;
     wa.syncState = "live";
     const snapshot=wa.conversations.slice();
     const checkpoint=snapshot.length<=10000?{syncedAt:wa.syncedAt,fullSyncedAt:wa.fullSyncedAt}:null;
     queueWhatsappCache(wa,async()=>{
-      await wa.cache?.[full?'replaceConversations':'putConversations']?.(full?snapshot:whatsappUpdates);
+      await wa.cache?.[full?'replaceConversations':'putConversations']?.(full?snapshot:changedConversations);
       await wa.cache?.setMeta?.('completeInbox',checkpoint);
     });
-    if (whatsappUpdates.length || selectedChanged) {
-      refreshWhatsappLiveDom({ messagesChanged: incoming.length > 0 || markerUpdates.length > 0 });
-    }
+    refreshWhatsappLiveDom();
+    if (selectedChanged || markerUpdates.length) renderWhatsappBackground();
     if (incoming.some((item) => item.direction === "INBOUND")) markSelectedConversationRead();
     if (newlyUnread.length) showInboundNotification(newlyUnread[0]);
     updateSmartReminders();
@@ -1804,7 +1809,7 @@ function refreshWhatsappLiveDom({ messagesChanged = false } = {}) {
   const list = document.querySelector("#wa-conversation-list");
   if (list) {
     const listViewport = captureScrollAnchor(list, ".wa-conversation", "conversationId");
-    list.innerHTML = waConversationList();
+    patchMarkup(list, waConversationList());
     bindConversationRows();
     restoreScrollAnchor(list, listViewport, ".wa-conversation", "conversationId");
   }
@@ -1815,28 +1820,31 @@ function refreshWhatsappLiveDom({ messagesChanged = false } = {}) {
 // Keeping the original node also preserves selection, undo and IME composition.
 function renderWhatsappBackground() {
   if (!location.hash.startsWith('#whatsapp')) return;
-  const active = document.activeElement;
+  const wa = state.whatsapp;
   const panel = document.querySelector('[data-chat-conversation-id]');
-  const sameChat = (panel?.dataset.chatConversationId || null) === (state.whatsapp.selectedId || null);
-  // A mouse press focuses its button before click fires. Preserve that target
-  // too, so a deferred editor blur refresh cannot swallow the Send click.
-  const editing = active?.matches?.('input, textarea, select, button, a[href], summary, [contenteditable="true"]');
-  if (sameChat && editing) {
-    refreshWhatsappMessagesDom();
-    const wa = state.whatsapp;
-    if (!wa.editorRefreshPending) {
-      wa.editorRefreshPending = true;
-      active.addEventListener('blur', () => {
-        // Allow the clicked button's handler to run before rebuilding controls.
-        setTimeout(() => {
-          wa.editorRefreshPending = false;
-          if (state.whatsapp === wa) renderWhatsappBackground();
-        }, 0);
-      }, { once: true });
-    }
-    return;
-  }
-  renderWhatsappPage();
+  if (!panel || panel.dataset.chatConversationId !== wa.selectedId) { renderWhatsappPage(); return; }
+  const selected = selectedConversation();
+  if (!selected) return;
+  const viewport = captureWhatsappViewport();
+  const draft = document.querySelector('#wa-message-input')?.value ?? wa.drafts[wa.selectedId] ?? '';
+  const desired = document.createElement('template');
+  desired.innerHTML = whatsappChatMarkup(selected, draft);
+  patchNode(panel, desired.content.querySelector('[data-chat-conversation-id]'), {skip: node => wa.recording && node.nodeType === 1 && node.classList.contains('wa-composer')});
+  const workspace = document.querySelector('#wa-client-workspace');
+  if (workspace) patchNode(workspace, desired.content.querySelector('#wa-client-workspace'));
+  bindWhatsappEvents();
+  bindReferenceWhatsapp();
+  pruneWhatsappMediaObjectUrls();
+  restoreWhatsappViewport(viewport, wa.selectedId);
+  installWhatsappMediaScrollStability(document.querySelector('#wa-message-list'));
+}
+
+function pruneWhatsappMediaObjectUrls() {
+  const used = new Set([...document.querySelectorAll('[data-protected-media]')].map(node => node.src));
+  state.whatsapp.mediaObjectUrls = state.whatsapp.mediaObjectUrls.filter(url => {
+    if (used.has(url)) return true;
+    URL.revokeObjectURL(url); return false;
+  });
 }
 
 function whatsappMessagesMarkup() {
@@ -1850,17 +1858,17 @@ function refreshWhatsappMessagesDom() {
   const body = document.querySelector('#wa-message-list');
   if (!body) return;
   const viewport = captureWhatsappViewport();
-  releaseMediaObjectUrls();
-  body.innerHTML = whatsappMessagesMarkup();
+  patchMarkup(body, whatsappMessagesMarkup());
+  pruneWhatsappMediaObjectUrls();
   bindWhatsappMessageEvents();
   const count = document.querySelector('#wa-search-match-count');
-  if (count) count.textContent = `${smartVisibleMessages().length} messages`;
+  if (count && count.textContent !== `${smartVisibleMessages().length} messages`) count.textContent = `${smartVisibleMessages().length} messages`;
   restoreWhatsappViewport(viewport, state.whatsapp.selectedId);
   installWhatsappMediaScrollStability(body);
 }
 
 function bindWhatsappOlderMessages() {
-  document.querySelector('#wa-load-older')?.addEventListener('click', async event => {
+  bindLiveEvent(document.querySelector('#wa-load-older'), "binding-103182", 'click', async event => {
     const wa = state.whatsapp;
     try {
     const id = wa.selectedId; event.currentTarget.disabled = true;
@@ -1980,7 +1988,7 @@ function updateWhatsappSyncBadge() {
   const badge = document.querySelector("#wa-sync-state");
   if (!badge) return;
   const indicator = whatsappSyncIndicator();
-  badge.textContent = indicator.label;
+  if (badge.textContent !== indicator.label) badge.textContent = indicator.label;
   badge.classList.toggle("connected", indicator.connected);
   badge.classList.toggle("disconnected", !indicator.connected);
 }
@@ -2084,13 +2092,13 @@ function updateWhatsappFilterCounts() {
   document.querySelectorAll("[data-wa-filter]").forEach(button => {
     const active = button.dataset.waFilter === wa.filter;
     button.classList.toggle("active", active);
-    button.setAttribute("aria-pressed", String(active));
+    if (button.getAttribute("aria-pressed") !== String(active)) button.setAttribute("aria-pressed", String(active));
     const count = button.querySelector(".wa-filter-count");
-    if (count) count.textContent = formatCount(counts[button.dataset.waFilter]);
+    if (count && count.textContent !== formatCount(counts[button.dataset.waFilter])) count.textContent = formatCount(counts[button.dataset.waFilter]);
   });
-  document.querySelectorAll("[data-wa-owner]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.waOwner === wa.ownerFilter)));
+  document.querySelectorAll("[data-wa-owner]").forEach(button => { const value = String(button.dataset.waOwner === wa.ownerFilter); if (button.getAttribute("aria-pressed") !== value) button.setAttribute("aria-pressed", value); });
   const summary = document.querySelector("#wa-inbox-counts");
-  if (summary) summary.innerHTML = waInboxSummary(counts);
+  if (summary) patchMarkup(summary, waInboxSummary(counts));
 }
 function orderReference(order) { return order.orderNumber || `ORD-${String(order.orderId || "").slice(-8).toUpperCase()}`; }
 function suggestedTemplate(status) { return ({ CONFIRMED: "order_confirmation", DESIGN_READY: "design_ready", DISPATCHED: "dispatch_update", DELIVERED: "order_delivered" })[status] || null; }
@@ -3307,7 +3315,7 @@ async function renderClient(contactId) {
   const client = data.contact;
   page.innerHTML = `
     <div class="section-head"><div><a href="#clients" class="muted">← Back to clients</a></div></div>
-    <section class="detail-hero"><div class="detail-person"><div class="detail-avatar">${esc(initials(client.companyName || client.contactPerson))}</div><div><h1>${esc(client.companyName || client.contactPerson || "Unnamed client")}</h1><p>${esc(client.primaryPhone || "No phone")} · ${esc(client.city || "City not set")}</p></div></div><div class="detail-actions"><span class="badge green">${esc(pretty(client.relationshipType || "CLIENT"))}</span><button class="button wa-open-client" id="open-client-whatsapp" ${client.primaryPhone ? "" : "disabled"}>Open WhatsApp</button></div></section>
+    <section class="detail-hero"><div class="detail-person"><div class="detail-avatar">${esc(initials(client.companyName || client.contactPerson))}</div><div><h1>${esc(client.companyName || client.contactPerson || "Unnamed client")}</h1><p>${esc(client.primaryPhone || "No phone")} · ${esc(client.city || "City not set")}</p></div></div><div class="detail-actions"><span class="badge green">${esc(pretty(client.relationshipType || "CLIENT"))}</span><button class="button button-secondary" id="client-new-quotation">Quotation</button><button class="button wa-open-client" id="open-client-whatsapp" ${client.primaryPhone ? "" : "disabled"}>Open WhatsApp</button></div></section>
     <div class="detail-stats">
       ${miniStat("Orders", data.summary.totalOrders)}${miniStat("Order value", money(data.summary.totalValue))}${miniStat("Paid", money(data.summary.paidAmount))}${miniStat("Outstanding", money(data.summary.outstandingAmount))}
     </div>
@@ -3321,6 +3329,7 @@ async function renderClient(contactId) {
         </tbody></table></div>
       </section>
     </div>`;
+  document.querySelector("#client-new-quotation").onclick = () => openQuotationForClient(client);
   document.querySelector("#open-client-whatsapp")?.addEventListener("click", async (event) => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -3596,7 +3605,7 @@ function saveSmartDraft() {
 
 function bindSmartInbox() {
   const wa = state.whatsapp;
-  const on = (id, event, fn) => document.querySelector(id)?.addEventListener(event, fn);
+  const on = (id, event, fn) => bindLiveEvent(document.querySelector(id), "binding-220487", event, fn);
   const run = fn => async event => { try { await fn(event); } catch (error) { notify(error.message, true); } };
   on('#wa-message-input','input',saveSmartDraft);
   on('#wa-message-input','keydown', event => {
@@ -3605,7 +3614,7 @@ function bindSmartInbox() {
   });
   on('#wa-smart-sort','change',event => { wa.sort = event.target.value; refreshWhatsappLiveDom(); });
   on('#wa-smart-refresh','click',run(async () => { wa.fullSyncedAt = null; await pollWhatsapp(); }));
-  document.querySelectorAll('[data-smart-pref]').forEach(button => button.addEventListener('click',run(async () => {
+  document.querySelectorAll('[data-smart-pref]').forEach(button => bindLiveEvent(button, "binding-221352", 'click',run(async () => {
     const key = button.dataset.smartPref; button.disabled = true;
     try { await saveSmartPreference({ [key]: !selectedConversation()?.preferences?.[key] }); renderWhatsappPage(); } finally { button.disabled = false; }
   })));
@@ -3635,13 +3644,13 @@ function bindSmartInbox() {
     const {data} = await api(`/leads/${encodeURIComponent(lead.leadId)}`,{method:'PATCH',body:{ leadStatus: document.querySelector('#wa-lead-stage').value, interestLevel: document.querySelector('#wa-lead-interest').value, productRequired: document.querySelector('#wa-product-required').value.split(',').map(v=>v.trim()).filter(Boolean) }});
     selectedConversation().lead = data; renderWhatsappPage(); notify('Client follow-up stage saved.');
   }));
-  document.querySelectorAll('[data-followup-days]').forEach(button=>button.addEventListener('click',()=>{
+  document.querySelectorAll('[data-followup-days]').forEach(button=>bindLiveEvent(button, "binding-224213", 'click',()=>{
     const time = new Date(); const days = Number(button.dataset.followupDays);
     if (days === 0) time.setHours(time.getHours()+1); else {time.setDate(time.getDate()+days);time.setHours(10,0,0,0);}
     time.setMinutes(time.getMinutes()-time.getTimezoneOffset());
     document.querySelector('#wa-followup-at').value=time.toISOString().slice(0,16);
   }));
-  document.querySelectorAll('[data-complete-followup]').forEach(button=>button.addEventListener('click',run(async()=>{
+  document.querySelectorAll('[data-complete-followup]').forEach(button=>bindLiveEvent(button, "binding-224684", 'click',run(async()=>{
     await api(`/followups/${encodeURIComponent(button.dataset.completeFollowup)}/complete`,{method:'POST',body:{outcome:'Completed from smart inbox'}});
     wa.overviewCachedAt=0; await loadWhatsappConversation(wa.selectedId,{incremental:true}); wa.fullSyncedAt=null; renderWhatsappPage();
   })));
@@ -3653,14 +3662,14 @@ function bindSmartInbox() {
     await api('/whatsapp/quick-replies',{method:'POST',body:{title:title.trim(),text,shortcut:shortcut.trim()}});
     wa.quickReplies=(await api('/whatsapp/quick-replies?limit=100')).data; renderWhatsappPage();notify('Quick reply saved.');
   }));
-  document.querySelectorAll('[data-insert-emoji]').forEach(button=>button.addEventListener('click',()=>{
+  document.querySelectorAll('[data-insert-emoji]').forEach(button=>bindLiveEvent(button, "binding-225751", 'click',()=>{
     const input=document.querySelector('#wa-message-input'); if(!input)return;
     input.setRangeText(button.dataset.insertEmoji,input.selectionStart,input.selectionEnd,'end');input.focus();saveSmartDraft();
   }));
 }
 
 function bindSmartMessageTools() {
-  const bind = (selector,fn) => document.querySelectorAll(selector).forEach(button=>button.addEventListener('click',async()=>{try{await fn(button);}catch(error){notify(error.message,true);}}));
+  const bind = (selector,fn) => document.querySelectorAll(selector).forEach(button=>bindLiveEvent(button, "binding-226133", 'click',async()=>{try{await fn(button);}catch(error){notify(error.message,true);}}));
   bind('[data-star-message]',async button=>{
     const ids = new Set(selectedConversation()?.preferences?.starredMessageIds || []); const id=button.dataset.starMessage;
     if(ids.has(id))ids.delete(id);else ids.add(id);
@@ -3754,8 +3763,8 @@ function applyReferencePreferences() {
   root.dataset.referenceWallpaper = prefs.wallpaper === 'plain' ? 'plain' : 'grid';
 }
 function bindReferenceWhatsapp() {
-  applyReferencePreferences();
-  const on=(selector,handler)=>document.querySelector(selector)?.addEventListener('click',handler);
+  if (!document.querySelector(".wa-shell")?.dataset.referenceTheme) applyReferencePreferences();
+  const on=(selector,handler)=>bindLiveEvent(document.querySelector(selector), "binding-234919", 'click',handler);
   on('#wa-toggle-filters',event=>{
     const filters=document.querySelector('#wa-reference-filters'); filters.hidden=!filters.hidden;
     event.currentTarget.setAttribute('aria-expanded',String(!filters.hidden)); saveReferencePreferences({filtersCollapsed:filters.hidden});
@@ -3766,8 +3775,8 @@ function bindReferenceWhatsapp() {
   on('#wa-reference-photos',()=>{ const input=document.querySelector('#wa-attachment-input'); input.accept='image/*,video/*'; input.click(); });
   on('#wa-reference-emoji',openReferenceEmoji);
   on('#wa-reference-new-chat',openReferenceNewChat);
-  if (state.whatsapp.recording) {
-    const pause = document.createElement('button'); pause.type='button'; pause.className='wa-tool-button'; pause.textContent='Ⅱ'; pause.setAttribute('aria-label','Pause recording');
+  if (state.whatsapp.recording && !document.querySelector("#wa-pause-recording")) {
+    const pause = document.createElement('button'); pause.id='wa-pause-recording'; pause.type='button'; pause.className='wa-tool-button'; pause.textContent='Ⅱ'; pause.setAttribute('aria-label','Pause recording');
     document.querySelector('#wa-record-audio')?.before(pause);
     pause.onclick=()=>{const recorder=state.whatsapp.mediaRecorder;if(recorder?.state==='recording'){recorder.pause();pause.textContent='▶';pause.setAttribute('aria-label','Resume recording');}else if(recorder?.state==='paused'){recorder.resume();pause.textContent='Ⅱ';pause.setAttribute('aria-label','Pause recording');}};
   }
@@ -3775,17 +3784,17 @@ function bindReferenceWhatsapp() {
     const p=referencePreferences();
     const dialog=smartDialog('Chat settings',`<label>Appearance<select id="ref-theme"><option value="light">Light</option><option value="dark">Dark</option></select></label><label>Wallpaper<select id="ref-wallpaper"><option value="grid">Grid</option><option value="plain">Plain</option></select></label><label>Message size<input id="ref-size" type="range" min="14" max="22" value="${Math.max(14,Math.min(22,Number(p.fontSize)||16))}"></label><button id="ref-alerts" type="button">Enable desktop alerts</button>`);
     dialog.querySelector('#ref-theme').value=p.theme==='dark'?'dark':'light'; dialog.querySelector('#ref-wallpaper').value=p.wallpaper==='plain'?'plain':'grid';
-    dialog.querySelectorAll('select,input').forEach(input=>input.addEventListener('input',()=>{saveReferencePreferences({theme:dialog.querySelector('#ref-theme').value,wallpaper:dialog.querySelector('#ref-wallpaper').value,fontSize:Number(dialog.querySelector('#ref-size').value)});applyReferencePreferences();}));
+    dialog.querySelectorAll('select,input').forEach(input=>bindLiveEvent(input, "binding-237314", 'input',()=>{saveReferencePreferences({theme:dialog.querySelector('#ref-theme').value,wallpaper:dialog.querySelector('#ref-wallpaper').value,fontSize:Number(dialog.querySelector('#ref-size').value)});applyReferencePreferences();}));
     dialog.querySelector('#ref-alerts').onclick=enableDesktopAlerts;
   });
   const resizer=document.querySelector('#wa-reference-resizer');
   if(resizer){
     const setWidth=value=>{ const width=Math.max(290,Math.min(520,value));saveReferencePreferences({width});applyReferencePreferences();resizer.setAttribute('aria-valuenow',width); };
     resizer.setAttribute('aria-valuemin','290');resizer.setAttribute('aria-valuemax','520');resizer.setAttribute('aria-valuenow',String(referencePreferences().width||370));
-    resizer.addEventListener('pointerdown',event=>{resizer.setPointerCapture(event.pointerId);});
-    resizer.addEventListener('pointermove',event=>{if(resizer.hasPointerCapture(event.pointerId))setWidth(event.clientX-document.querySelector('.wa-shell').getBoundingClientRect().left);});
-    resizer.addEventListener('dblclick',()=>setWidth(370));
-    resizer.addEventListener('keydown',event=>{if(['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();setWidth((Number(referencePreferences().width)||370)+(event.key==='ArrowLeft'?-20:20));}});
+    bindLiveEvent(resizer, "binding-238093", 'pointerdown',event=>{resizer.setPointerCapture(event.pointerId);});
+    bindLiveEvent(resizer, "binding-238192", 'pointermove',event=>{if(resizer.hasPointerCapture(event.pointerId))setWidth(event.clientX-document.querySelector('.wa-shell').getBoundingClientRect().left);});
+    bindLiveEvent(resizer, "binding-238383", 'dblclick',()=>setWidth(370));
+    bindLiveEvent(resizer, "binding-238444", 'keydown',event=>{if(['ArrowLeft','ArrowRight'].includes(event.key)){event.preventDefault();setWidth((Number(referencePreferences().width)||370)+(event.key==='ArrowLeft'?-20:20));}});
   }
 }
 async function openReferenceEmoji() {
@@ -3878,3 +3887,128 @@ function openReferenceNewChat() {
 }
 
 
+
+
+async function loadQuotationTools() {
+  if (!loadQuotationTools.pending) loadQuotationTools.pending = (async () => {
+    if (!window.jspdf?.jsPDF) await new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = '/jspdf.umd.min.js'; script.onload = resolve;
+      script.onerror = () => { script.remove(); reject(new Error('Could not load quotation tools. Try again.')); };
+      document.head.append(script);
+    });
+    return Promise.all([import('./quotation-tools.mjs'), import('./quotation-client.mjs')]);
+  })().catch(error => { loadQuotationTools.pending = null; throw error; });
+  return loadQuotationTools.pending;
+}
+
+async function openQuotationForClient(contact, chatId = null, saved = null) {
+  if (openQuotationForClient.opening || document.querySelector(".wa-quote-dialog")) return;
+  openQuotationForClient.opening = true;
+  try {
+    const sessionUser = state.session?.userId;
+    const checkSession = () => { if (!sessionUser || state.session?.userId !== sessionUser) throw new Error('Session changed. Reopen the quotation.'); };
+    const [ui, client] = await loadQuotationTools();
+    checkSession();
+    const contactId = contact.contactId || contact.id;
+    if (!chatId) chatId = conversationId((await api('/conversations/start',{method:'POST',body:{contactId}})).data);
+    checkSession();
+    const session = client.createQuotationSession({api,upload:uploadAttachment,contactId,conversationId:chatId,saved,checkSession});
+    const tools = ui.createQuotationTools({esc,notify,preparedBy:state.session.name || 'RX Team',save:session.save,
+      send:async quote => {
+        await session.send(quote);
+        if (location.hash.startsWith('#whatsapp') && state.whatsapp.selectedId === chatId) {
+          loadWhatsappConversation(chatId,{incremental:true}).then(renderWhatsappBackground).catch(() => {});
+        }
+      }
+    });
+    tools.open({...contact,id:contactId,phone:contact.primaryPhone,name:contact.contactPerson},saved ? {...saved,createdAt:asDate(saved.createdAt)?.toISOString()} : null);
+  } catch(error) { notify(error.message,true); }
+  finally {openQuotationForClient.opening = false;}
+}
+
+async function openCurrentQuotation() {
+  const conversation = selectedConversation();
+  if (!conversation) return;
+  const id = conversationId(conversation);
+  try {
+    const contactId = conversation.contactId;
+    const contact = (await api(`/contacts/${encodeURIComponent(contactId)}`)).data;
+    await openQuotationForClient(contact,id);
+  } catch(error) { notify(error.message,true); }
+}
+
+async function showSavedQuotation(id) {
+  const {data:quote} = await api(`/quotations/${encodeURIComponent(id)}`);
+  if (!quote.pdfAttachmentId) {
+    const {data:contact} = await api(`/contacts/${encodeURIComponent(quote.contactId)}`);
+    return openQuotationForClient(contact,quote.conversationId,quote);
+  }
+  const blob = await fetchAttachmentBlob(quote.pdfAttachmentId);
+  const url = URL.createObjectURL(blob);
+  const dialog = document.createElement('dialog');
+  dialog.className = 'wa-quote-dialog wa-quote-dialog--preview';
+  dialog.setAttribute('aria-label','Saved quotation');
+  dialog.innerHTML = `<header class="wa-quote-dialog__header"><div><span>${esc(quote.quotationNumber || id)} · ${esc(pretty(quote.status))}</span><h2>${esc(quote.companyName)}</h2></div><button class="wa-quote-dialog__close" aria-label="Close">×</button></header><div class="wa-quote-dialog__body"><section class="wa-quote-preview"><button class="wa-quote-preview__close" aria-label="Close saved quotation">×</button><iframe title="Saved quotation PDF" src="${url}#toolbar=1&view=FitV"></iframe><div class="wa-quote-preview__actions"><a class="button button-secondary" href="${url}" download="${attr(quote.quotationNumber || id)}.pdf">Download PDF</a>${quote.status === 'DRAFT' ? '<button class="wa-quote-secondary" data-quote-edit>Edit draft</button><button class="wa-quote-primary" data-quote-send>Send on WhatsApp</button>' : ''}${quote.conversationId ? `<a class="button button-secondary" href="#whatsapp/${attr(quote.conversationId)}" data-quote-chat>View chat & delivery</a>` : ''}<p class="wa-quote-notice" role="status">${quote.status === 'QUEUED' ? 'Queued for sending. Check actual delivery in the chat.' : 'This is the saved PDF. Sending requires an open 24-hour reply window.'}</p></div></section></div>`;
+  document.body.append(dialog);
+  let busy = false;
+  const close = () => { if(busy) return; dialog.close(); dialog.remove(); URL.revokeObjectURL(url); };
+  dialog.querySelector('.wa-quote-dialog__close').onclick = close;
+  dialog.querySelector('.wa-quote-preview__close').onclick = close;
+  dialog.addEventListener('cancel',event => {event.preventDefault();close();});
+  dialog.querySelector('[data-quote-chat]')?.addEventListener('click',close);
+  dialog.querySelector('[data-quote-edit]')?.addEventListener('click',async () => {
+    try { const {data:contact} = await api(`/contacts/${encodeURIComponent(quote.contactId)}`); close(); await openQuotationForClient(contact,quote.conversationId,quote); }
+    catch(error) {notify(error.message,true);}
+  });
+  dialog.querySelector('[data-quote-send]')?.addEventListener('click',async event => {
+    busy = true; event.currentTarget.disabled = true;
+    dialog.querySelector('[data-quote-edit]').disabled = true;
+    const status = dialog.querySelector('[role="status"]'); status.textContent = 'Queuing quotation…';
+    try {
+      await api(`/quotations/${encodeURIComponent(id)}/send`,{method:'POST',body:{}});
+      busy = false; close(); notify('Quotation queued. Check delivery in WhatsApp.');
+      if(location.hash === '#quotations') await renderQuotations();
+    } catch(error) {
+      status.textContent = error.message; notify(error.message,true);
+      dialog.querySelector('[data-quote-send]').disabled = false;
+      dialog.querySelector('[data-quote-edit]').disabled = false;
+    } finally {busy = false;}
+  });
+  dialog.showModal();
+}
+
+async function renderQuotations() {
+  pageTitle.textContent = 'Quotations';
+  page.innerHTML = `<div class="section-head"><div><h1>Quotations</h1><p>Saved drafts and PDFs, linked to your clients.</p></div><a class="button button-primary" href="#clients">Choose client · New quotation</a></div><section class="panel"><div class="quotation-actions"><input id="quotation-search" type="search" placeholder="Find in loaded quotations: client, number, phone" aria-label="Search loaded quotations"/><button id="quotation-refresh" class="button button-secondary">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Quotation / client</th><th>Date</th><th>Total</th><th>Status</th><th></th></tr></thead><tbody id="quotation-rows"></tbody></table></div><p id="quotation-status" class="muted" role="status"></p><button id="quotation-more" class="button button-secondary" hidden>Load more</button></section>`;
+  const rows = document.querySelector('#quotation-rows');
+  const search = document.querySelector('#quotation-search');
+  const more = document.querySelector('#quotation-more');
+  const status = document.querySelector('#quotation-status');
+  let loaded = [], cursor = null;
+  const draw = () => {
+    const needle = search.value.trim().toLowerCase();
+    const visible = loaded.filter(q => [q.quotationNumber,q.companyName,q.phone].some(v => String(v || '').toLowerCase().includes(needle)));
+    rows.innerHTML = visible.length ? visible.map(q => `<tr><td><strong>${esc(q.quotationNumber || q.quotationId)}</strong><br>${esc(q.companyName || 'Client')}<br><small>${esc(q.phone)}</small></td><td>${esc(date(q.createdAt))}</td><td>${new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:2}).format(q.totalAmount || 0)}</td><td>${esc(pretty(q.status))}${q.status === 'QUEUED' ? '<br><small>See chat for delivery</small>' : ''}</td><td><button class="button button-secondary" data-quotation="${attr(q.quotationId)}">${q.pdfAttachmentId ? 'Preview' : 'Open draft'}</button></td></tr>`).join('') : '<tr><td colspan="5">No matching quotations in loaded records.</td></tr>';
+    rows.querySelectorAll('[data-quotation]').forEach(button => button.onclick = async () => {
+      button.disabled = true; try {await showSavedQuotation(button.dataset.quotation);} catch(error) {notify(error.message,true);} finally {button.disabled = false;}
+    });
+  };
+  const load = async () => {
+    more.disabled = true; status.textContent = 'Loading quotations…';
+    try {
+      const result = await api(`/quotations?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`);
+      if(!rows.isConnected) return;
+      loaded = [...new Map([...loaded,...result.data].map(q => [q.quotationId,q])).values()];
+      cursor = result.pagination?.nextCursor;
+      more.hidden = !result.pagination?.hasMore;
+      status.textContent = `${loaded.length} quotations loaded${more.hidden ? '' : ' · Load more for older records'}`;
+      draw();
+    } catch(error) {status.textContent = error.message; more.hidden = false;more.textContent='Retry loading';}
+    finally {more.disabled=false;}
+  };
+  search.oninput = draw;
+  more.onclick = load;
+  document.querySelector('#quotation-refresh').onclick = renderQuotations;
+  await load();
+}

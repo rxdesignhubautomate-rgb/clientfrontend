@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {bindLiveEvent} from '../src/dom-patch.mjs';
 import fs from 'node:fs';
 import { inboxMatches, inboxCounts, inboxOwners, avatarStyle, uiIcon } from '../src/inbox-style.js';
 
@@ -47,7 +48,7 @@ function createHarness({ mobile = false } = {}) {
   const source = app.slice(app.indexOf('async function login(event)'));
   const calls = [];
   const context = vm.createContext({
-    uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners, URL, URLSearchParams, Date, Intl, console, setTimeout, clearTimeout,
+    bindLiveEvent, patchMarkup: (node,markup) => {node.innerHTML=markup;}, uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners, URL, URLSearchParams, Date, Intl, console, setTimeout, clearTimeout,
     window: { matchMedia: () => ({ matches: mobile }) },
     config:{apiBaseUrl:'https://example.test/api'},pageTitle:{textContent:''},location:{hash:'#whatsapp'},WHATSAPP_SYNC_OVERLAP_MS:2000,
     document: { querySelector: () => null, querySelectorAll: () => [] },
@@ -66,34 +67,24 @@ function createHarness({ mobile = false } = {}) {
   return { context, calls, wa: context.state.whatsapp };
 }
 
-test('background updates preserve the active editor and selection while messages still refresh', () => {
-  for (const kind of ['textarea', 'input', 'select', 'contenteditable', 'button']) {
-    const { context, wa, calls } = createHarness();
-    wa.selectedId = 'a';
-    const handlers = [];
-    const editor = { value: 'Hello client', selectionStart: 3, selectionEnd: 7,
-      matches: () => true, addEventListener: (event, callback) => handlers.push({event, callback}) };
-    context.document.activeElement = editor;
-    context.document.querySelector = selector => selector === '[data-chat-conversation-id]' ? {dataset:{chatConversationId:'a'}} : null;
-    vm.runInContext('fullPaints=0; messagePaints=0; renderWhatsappPage=()=>fullPaints++; refreshWhatsappMessagesDom=()=>messagePaints++;', context);
-    for(let n=0;n<5;n++) vm.runInContext('renderWhatsappBackground()',context);
-    assert.equal(context.fullPaints,0,kind);
-    assert.equal(context.messagePaints,5,kind);
-    assert.equal(context.document.activeElement,editor);
-    assert.equal(editor.value,'Hello client');
-    assert.equal(editor.selectionStart,3);
-    assert.equal(editor.selectionEnd,7);
-    assert.equal(handlers.length,1,'only one deferred refresh per editing session');
-    assert.equal(calls.length,0,'refresh does not send messages');
-    let deferred;
-    context.setTimeout=callback=>{deferred=callback;};
-    context.document.activeElement=null;
-    handlers[0].callback();
-    assert.equal(context.fullPaints,0,'blur must not replace the clicked send button before click');
-    deferred();
-    assert.equal(context.fullPaints,1);
-    assert.equal(wa.editorRefreshPending,false);
-  }
+test('background patches preserve editors even after focus leaves the composer', () => {
+  const {context,wa}=createHarness();
+  wa.selectedId='a';wa.conversations=structuredClone(conversations);
+  const editor={value:'Hello client',selectionStart:3,selectionEnd:7};
+  const panel={dataset:{chatConversationId:'a'}};
+  context.document.activeElement=editor;
+  context.document.querySelector=selector=>selector==='[data-chat-conversation-id]'?panel:selector==='#wa-message-input'?editor:null;
+  context.document.createElement=()=>({content:{querySelector:()=>({})}});
+  vm.runInContext(`fullPaints=0; patches=0; patchNode=()=>patches++;
+    renderWhatsappPage=()=>fullPaints++; bindReferenceWhatsapp=()=>{};
+    restoreWhatsappViewport=()=>{}; installWhatsappMediaScrollStability=()=>{};
+    for(let i=0;i<5;i++) renderWhatsappBackground();`,context);
+  assert.equal(context.fullPaints,0);assert.equal(context.patches,5);
+  assert.equal(context.document.activeElement,editor);assert.equal(editor.value,'Hello client');
+  assert.equal(editor.selectionStart,3);assert.equal(editor.selectionEnd,7);
+  context.document.activeElement=null;
+  vm.runInContext('renderWhatsappBackground()',context);
+  assert.equal(context.fullPaints,0,'no deferred whole-page repaint after blur');
 });
 
 test('background refresh renders a changed conversation and ignores another route', () => {
@@ -108,7 +99,7 @@ test('background refresh renders a changed conversation and ignores another rout
   assert.equal(context.fullPaints,1);
 });
 
-test('message-only refresh replaces history without replacing or binding the composer', () => {
+test('message-only refresh patches history without replacing or binding the composer', () => {
   const {context,wa}=createHarness();
   wa.messages=[{messageId:'m',text:'New reply'}];wa.selectedId='a';
   const history={innerHTML:''};
