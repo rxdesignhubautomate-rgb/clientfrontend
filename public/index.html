@@ -1,0 +1,888 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RX Design Hub · WhatsApp</title>
+    <link rel="stylesheet" href="assets/styles.css?v=9-compact" />
+    <link rel="stylesheet" href="assets/whatsapp.css?v=1" />
+    <link rel="stylesheet" href="assets/whatsapp-web.css?v=12-reply-timer" />
+    <link
+      rel="stylesheet"
+      href="assets/dashboard-whatsapp.css?v=9-lead-workspace"
+    />
+    <link rel="stylesheet" href="assets/marketing.css?v=1-campaign-history" />
+  </head>
+  <body>
+    <svg
+      class="wa-symbols"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      <defs>
+        <symbol id="wa-i-chat" viewBox="0 0 24 24">
+          <path
+            d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H5l-3 2V11.5A8.5 8.5 0 0 1 10.5 3h2a8.5 8.5 0 0 1 8.5 8.5Z"
+          />
+          <path d="M7 9h10M7 13h7" />
+        </symbol>
+        <symbol id="wa-i-search" viewBox="0 0 24 24">
+          <circle cx="10.5" cy="10.5" r="6.5" />
+          <path d="m16 16 4.5 4.5" />
+        </symbol>
+        <symbol id="wa-i-phone" viewBox="0 0 24 24">
+          <path
+            d="m5 3 4 4-2 3c1.4 3.2 3.8 5.6 7 7l3-2 4 4-2 2C10 22 2 14 3 5Z"
+          />
+        </symbol>
+        <symbol id="wa-i-more" viewBox="0 0 24 24">
+          <circle cx="12" cy="5" r="1" />
+          <circle cx="12" cy="12" r="1" />
+          <circle cx="12" cy="19" r="1" />
+        </symbol>
+        <symbol id="wa-i-plus" viewBox="0 0 24 24">
+          <path d="M12 4v16M4 12h16" />
+        </symbol>
+        <symbol id="wa-i-smile" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M8 14a4.5 4.5 0 0 0 8 0M8 8.5h.01M16 8.5h.01" />
+        </symbol>
+        <symbol id="wa-i-mic" viewBox="0 0 24 24">
+          <rect x="9" y="2" width="6" height="13" rx="3" />
+          <path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v3M8 22h8" />
+        </symbol>
+        <symbol id="wa-i-send" viewBox="0 0 24 24">
+          <path d="m3 3 19 9-19 9 4-9Zm4 9h15" />
+        </symbol>
+        <symbol id="wa-i-arrow" viewBox="0 0 24 24">
+          <path d="m12 5-7 7 7 7M5 12h15" />
+        </symbol>
+        <symbol id="wa-i-down" viewBox="0 0 24 24">
+          <path d="m6 9 6 6 6-6" />
+        </symbol>
+        <symbol id="wa-i-close" viewBox="0 0 24 24">
+          <path d="m6 6 12 12M18 6 6 18" />
+        </symbol>
+        <symbol id="wa-i-grid" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="7" height="7" rx="1" />
+          <rect x="14" y="3" width="7" height="7" rx="1" />
+          <rect x="3" y="14" width="7" height="7" rx="1" />
+          <rect x="14" y="14" width="7" height="7" rx="1" />
+        </symbol>
+        <symbol id="wa-i-image" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="18" height="18" rx="3" />
+          <circle cx="8" cy="8" r="1.5" />
+          <path d="m3 17 5-5 4 4 4-6 5 7" />
+        </symbol>
+        <symbol id="wa-i-file" viewBox="0 0 24 24">
+          <path d="M13 2H5v20h14V8Zm0 0v6h6M8 13h8M8 17h6" />
+        </symbol>
+        <symbol id="wa-i-refresh" viewBox="0 0 24 24">
+          <path
+            d="M20 7A9 9 0 0 0 4 6M4 17a9 9 0 0 0 16 1M20 2v5h-5M4 22v-5h5"
+          />
+        </symbol>
+        <symbol id="wa-i-settings" viewBox="0 0 24 24">
+          <path
+            d="m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3h6l1-3 3-1-1-3 2-2-2-2 1-3-3-1-1-3Z"
+          />
+          <circle cx="12" cy="12" r="3" />
+        </symbol>
+        <symbol id="wa-i-new" viewBox="0 0 24 24">
+          <path
+            d="M13 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-8M16 3h6M19 0v6M7 9h6M7 14h10"
+          />
+        </symbol>
+        <symbol id="wa-i-megaphone" viewBox="0 0 24 24">
+          <path d="M3 11v2a2 2 0 0 0 2 2h2l2 5h3l-2-5 9 3V6l-12 4H5a2 2 0 0 0-2 2Z" />
+          <path d="M21 9v6" />
+        </symbol>
+      </defs>
+    </svg>
+    <div class="app-shell">
+      <aside id="dashboardNav" class="dashboard-navigation" hidden></aside>
+      <aside id="marketingNav" class="dashboard-navigation" hidden></aside>
+      <button
+        id="toggleChromeBtn"
+        class="top-hide-button"
+        type="button"
+        title="Hide top panels"
+        aria-label="Hide top panels"
+        aria-expanded="true"
+      >
+        <span aria-hidden="true">^</span>
+      </button>
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">RX Design Hub</p>
+          <h1>CRM Console</h1>
+        </div>
+        <div class="topbar-right">
+          <button
+            id="notifyBtn"
+            class="notify-bell"
+            type="button"
+            title="Turn on desktop reminders"
+            aria-label="Notifications"
+            aria-pressed="false"
+          >
+            <span class="bell-icon" aria-hidden="true">🔔</span>
+            <span id="notifyBadge" class="notify-badge" hidden>0</span>
+          </button>
+          <div class="status-pill" id="connectionStatus">Not connected</div>
+          <button
+            type="button"
+            id="waAccount"
+            class="wa-account-button"
+            aria-controls="crmAccountDialog"
+            aria-expanded="false"
+            aria-haspopup="dialog"
+          >
+            <svg aria-hidden="true"><use href="#wa-i-settings" /></svg>Account
+          </button>
+        </div>
+      </header>
+
+      <dialog
+        id="crmAccountDialog"
+        class="connection-band"
+        aria-labelledby="waAccountTitle"
+      >
+        <div class="wa-account-heading">
+          <h2 id="waAccountTitle">CRM account</h2>
+          <button
+            id="waAccountClose"
+            class="wa-icon-btn"
+            type="button"
+            aria-label="Close account"
+          >
+            <svg><use href="#wa-i-close" /></svg>
+          </button>
+        </div>
+        <p id="waAccountStatus" class="wa-account-status">Not connected</p>
+        <label>
+          Login Role
+          <select id="roleSelect">
+            <option value="admin">Admin</option>
+            <option value="ankit">Ankit</option>
+            <option value="reshu">Reshu</option>
+            <option value="shubham">Shubham</option>
+          </select>
+        </label>
+        <label>
+          PIN
+          <input
+            id="pinInput"
+            type="password"
+            inputmode="numeric"
+            placeholder="Enter PIN"
+          />
+        </label>
+        <label>
+          This Laptop Code
+          <input id="laptopCode" type="text" readonly />
+        </label>
+        <button id="copyLaptopBtn" class="ghost-button" type="button">
+          Copy Code
+        </button>
+        <button id="connectBtn" class="primary-action" type="button">
+          Login
+        </button>
+        <button id="logoutBtn" class="ghost-button" type="button">
+          Logout
+        </button>
+        <p
+          id="waAccountFeedback"
+          class="wa-account-feedback"
+          role="status"
+          hidden
+        ></p>
+      </dialog>
+
+      <nav class="workspace-tabs" aria-label="Workspace" hidden>
+        <button type="button" id="showWhatsApp" aria-pressed="true">
+          WhatsApp <span id="waTotalUnread" hidden></span>
+        </button>
+        <button type="button" id="showDashboard" aria-pressed="false">
+          Sales dashboard
+        </button>
+      </nav>
+      <main>
+        <section
+          id="whatsappWorkspace"
+          class="whatsapp-workspace"
+          aria-label="WhatsApp inbox"
+        >
+          <nav id="workspaceRail" class="wa-rail" aria-label="App navigation">
+            <button
+              class="wa-rail-button selected"
+              id="waRailChats"
+              type="button"
+              aria-label="WhatsApp"
+              aria-pressed="true"
+              title="WhatsApp"
+            >
+              <svg><use href="#wa-i-chat" /></svg
+              ><span id="waRailUnread" class="wa-rail-badge" hidden></span>
+            </button>
+            <button
+              class="wa-rail-button"
+              id="waRailSamples"
+              type="button"
+              aria-label="Product samples"
+              title="Product samples"
+            >
+              <svg><use href="#wa-i-image" /></svg>
+            </button>
+            <button
+              class="wa-rail-button"
+              id="waRailDashboard"
+              type="button"
+              aria-label="Sales dashboard"
+              aria-pressed="false"
+              title="Sales dashboard"
+            >
+              <svg><use href="#wa-i-grid" /></svg>
+            </button>
+            <button
+              class="wa-rail-button"
+              id="waRailMarketing"
+              type="button"
+              aria-label="Marketing history"
+              aria-pressed="false"
+              title="Marketing history"
+            >
+              <svg><use href="#wa-i-megaphone" /></svg>
+            </button>
+            <span class="wa-rail-spacer"></span
+            ><span class="wa-rail-brand" aria-hidden="true">RX</span>
+            <button
+              class="wa-rail-button"
+              id="waRailAccount"
+              type="button"
+              aria-label="Account settings"
+              aria-controls="crmAccountDialog"
+              aria-expanded="false"
+              aria-haspopup="dialog"
+              title="Account settings"
+            >
+              <svg><use href="#wa-i-settings" /></svg>
+            </button>
+          </nav>
+          <aside class="wa-inbox">
+            <header class="wa-inbox-header">
+              <div>
+                <h2>WhatsApp</h2>
+                <span id="waConnection">Sign in to load your chats</span>
+              </div>
+              <div class="wa-header-actions">
+                <button
+                  id="waToggleInboxControls"
+                  class="wa-icon-btn wa-inbox-controls-toggle"
+                  type="button"
+                  title="Hide inbox filters"
+                  aria-label="Hide inbox filters"
+                  aria-expanded="true"
+                  aria-controls="waInboxControls"
+                >
+                  <svg><use href="#wa-i-down" /></svg>
+                </button>
+                <button
+                  id="waFindChat"
+                  class="wa-icon-btn"
+                  type="button"
+                  title="Find a conversation"
+                  aria-label="Find a conversation"
+                >
+                  <svg><use href="#wa-i-new" /></svg></button
+                ><button
+                  id="waRefresh"
+                  class="wa-icon-btn"
+                  type="button"
+                  title="Sync all chats and rebuild cache"
+                  aria-label="Sync all chats and rebuild cache"
+                >
+                  <svg><use href="#wa-i-refresh" /></svg>
+                </button>
+              </div>
+            </header>
+            <div id="waInboxControls" class="wa-inbox-controls">
+              <label class="wa-search"
+                ><svg aria-hidden="true"><use href="#wa-i-search" /></svg
+                ><input
+                  id="waSearch"
+                  type="search"
+                  placeholder="Search conversations"
+                  aria-label="Search chats by name or number"
+              /></label>
+              <div class="wa-filters" role="group" aria-label="Chat filters">
+                <button type="button" data-wa-filter="all" aria-pressed="true">
+                  All
+                  <span class="wa-filter-count" id="waAllChatCount"
+                    >0</span
+                  ></button
+                ><button
+                  type="button"
+                  data-wa-filter="unread"
+                  aria-pressed="false"
+                >
+                  Unread
+                  <span class="wa-filter-count" id="waUnreadChatCount"
+                    >—</span
+                  ></button
+                ><button
+                  type="button"
+                  data-wa-filter="read"
+                  aria-pressed="false"
+                >
+                  Read
+                  <span class="wa-filter-count" id="waReadChatCount"
+                    >—</span
+                  ></button
+                ><button
+                  type="button"
+                  data-wa-filter="open"
+                  aria-pressed="false"
+                  title="Show chats you can reply to now: customer messaged within the last 24 hours."
+                >
+                  Open
+                  <span class="wa-filter-count" id="waOpenChatCount"
+                    >—</span
+                  ></button
+                ><button
+                  type="button"
+                  data-wa-filter="marketing"
+                  aria-pressed="false"
+                  title="Customers who replied after receiving a marketing template, including answered conversations."
+                >
+                  Marketing replies
+                  <span class="wa-filter-count" id="waMarketingReplyCount"
+                    >—</span
+                  ></button
+                ><button
+                  type="button"
+                  data-wa-filter="hot"
+                  aria-pressed="false"
+                >
+                  Hot leads
+                </button>
+              </div>
+              <div class="wa-inbox-counts" aria-label="Incoming message counts">
+                <div class="wa-message-counts">
+                  <span
+                    ><strong id="waUnreadMessageCount">—</strong> unread
+                    messages</span
+                  >
+                  <span
+                    ><strong id="waReadMessageCount">—</strong> read
+                    messages</span
+                  >
+                </div>
+                <small id="waCountScope"
+                  >Sign in to see read and unread counts.</small
+                >
+              </div>
+            </div>
+            <div
+              id="waChatList"
+              class="wa-chat-list"
+              aria-label="Conversations"
+            >
+              <div class="wa-empty-list">
+                Your customer conversations will appear here after you sign in.
+              </div>
+            </div>
+            <div class="wa-inbox-footer">
+              <span id="waInboxFooter">RX Design Hub · Team inbox</span
+              ><button
+                id="waMobileDashboard"
+                type="button"
+                class="wa-text-button"
+              >
+                CRM</button
+              ><button
+                id="waMobileAccount"
+                type="button"
+                class="wa-text-button"
+              >
+                Account
+              </button>
+            </div>
+          </aside>
+          <div
+            id="waPaneResizer"
+            class="wa-pane-resizer"
+            role="separator"
+            aria-label="Resize conversation list"
+            aria-orientation="vertical"
+            aria-valuemin="280"
+            aria-valuemax="640"
+            aria-valuenow="370"
+            tabindex="0"
+            title="Drag to resize the conversation list. Double-click to reset."
+          >
+            <span aria-hidden="true"></span>
+          </div>
+          <div class="wa-conversation">
+            <div id="waWelcome" class="wa-welcome">
+              <div class="wa-welcome-mark" aria-hidden="true">
+                <svg><use href="#wa-i-chat" /></svg>
+              </div>
+              <h2>WhatsApp for your team</h2>
+              <p>
+                Open a conversation to reply to your customers and share product
+                samples.
+              </p>
+              <button id="waWelcomeAccount" class="wa-action" type="button">
+                Sign in to your CRM</button
+              ><span>RX Design Hub</span>
+            </div>
+            <div id="waThread" class="wa-thread" hidden>
+              <header class="wa-thread-header">
+                <button
+                  id="waBack"
+                  class="wa-icon-btn wa-mobile-back"
+                  type="button"
+                  aria-label="Back to chats"
+                >
+                  <svg><use href="#wa-i-arrow" /></svg>
+                </button>
+                <div id="waAvatar" class="wa-avatar" aria-hidden="true"></div>
+                <button
+                  id="waContact"
+                  class="wa-contact"
+                  type="button"
+                  aria-label="Open contact details"
+                >
+                  <strong id="waName"></strong
+                  ><span id="waSubtitle"></span></button
+                ><span
+                  id="waReplyTimer"
+                  class="wa-reply-timer wa-reply-timer-header unknown"
+                  data-timer-kind="header"
+                  role="timer"
+                  aria-live="off"
+                  hidden
+                  >Reply window unknown</span
+                ><a
+                  id="waCall"
+                  class="wa-icon-btn"
+                  title="Open phone dialer"
+                  aria-label="Open phone dialer"
+                  ><svg><use href="#wa-i-phone" /></svg></a
+                ><button
+                  id="waSearchThread"
+                  class="wa-icon-btn"
+                  type="button"
+                  aria-label="Search this conversation"
+                  title="Search conversation"
+                >
+                  <svg><use href="#wa-i-search" /></svg></button
+                ><button
+                  id="waDetails"
+                  class="wa-icon-btn"
+                  type="button"
+                  aria-label="Contact details"
+                  title="Contact details"
+                >
+                  <svg><use href="#wa-i-more" /></svg>
+                </button>
+              </header>
+              <div id="waThreadSearch" class="wa-thread-search" hidden>
+                <input
+                  id="waMessageSearch"
+                  type="search"
+                  placeholder="Find in this conversation"
+                  aria-label="Find in this conversation"
+                /><span id="waSearchCount"></span>
+              </div>
+              <div id="waNotice" class="wa-notice" role="status" hidden></div>
+              <div
+                id="waMessages"
+                class="wa-messages"
+                tabindex="0"
+                aria-label="Message history"
+              >
+                <button id="waOlder" class="wa-older" type="button" hidden>
+                  Load earlier messages
+                </button>
+                <div id="waMessageItems"></div>
+              </div>
+              <button
+                id="waLatest"
+                class="wa-jump"
+                type="button"
+                aria-label="Jump to latest messages"
+                hidden
+              >
+                <svg><use href="#wa-i-down" /></svg>
+              </button>
+              <div id="waReplyPreview" class="wa-reply-preview" hidden></div>
+              <div
+                id="waAttachmentPreview"
+                class="wa-attachment-preview"
+                hidden
+              ></div>
+              <div id="waRecording" class="wa-recording" hidden></div>
+              <form id="waComposer" class="wa-composer">
+                <div class="wa-compose-tools">
+                  <button
+                    id="waAttach"
+                    class="wa-icon-btn"
+                    type="button"
+                    aria-label="Attach a file"
+                    title="Attach a file"
+                  >
+                    <svg><use href="#wa-i-plus" /></svg></button
+                  ><button
+                    id="waEmoji"
+                    class="wa-icon-btn"
+                    type="button"
+                    aria-label="Choose emoji"
+                    title="Emoji"
+                  >
+                    <svg><use href="#wa-i-smile" /></svg></button
+                  ><button
+                    id="waPhotos"
+                    class="wa-icon-btn wa-sample-btn"
+                    type="button"
+                    aria-label="Attach photos and videos"
+                    title="Photos & videos"
+                  >
+                    <svg><use href="#wa-i-image" /></svg>
+                  </button>
+                </div>
+                <textarea
+                  id="waDraft"
+                  rows="1"
+                  placeholder="Type a message"
+                  aria-label="Type a message"
+                ></textarea>
+                <button
+                  id="waMic"
+                  class="wa-icon-btn"
+                  type="button"
+                  aria-label="Record a voice message"
+                  title="Record a voice message"
+                >
+                  <svg><use href="#wa-i-mic" /></svg></button
+                ><button
+                  id="waSend"
+                  class="wa-send"
+                  type="submit"
+                  aria-label="Send message"
+                  title="Send message"
+                >
+                  <svg><use href="#wa-i-send" /></svg>
+                </button>
+              </form>
+              <input
+                id="waFile"
+                type="file"
+                hidden
+                accept="image/jpeg,image/png,video/mp4,video/3gpp,audio/mpeg,audio/mp4,audio/ogg,audio/aac,audio/amr,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
+              />
+            </div>
+          </div>
+          <aside
+            id="waDrawer"
+            class="wa-drawer"
+            hidden
+            aria-label="Conversation tools"
+          >
+            <header>
+              <h3 id="waDrawerTitle">Product samples</h3>
+              <button
+                id="waCloseDrawer"
+                class="wa-icon-btn"
+                type="button"
+                aria-label="Close panel"
+              >
+                <svg><use href="#wa-i-close" /></svg>
+              </button>
+            </header>
+            <div id="waDrawerBody"></div>
+          </aside>
+        </section>
+        <section
+          id="marketingWorkspace"
+          class="marketing-workspace"
+          aria-label="WhatsApp marketing history"
+          hidden
+        >
+          <header class="marketing-hero">
+            <div>
+              <p class="marketing-eyebrow">WhatsApp Marketing</p>
+              <h2>Campaign history</h2>
+              <p class="marketing-subtitle">
+                Track every marketing send and see which campaigns bring replies.
+              </p>
+            </div>
+            <div class="marketing-hero-actions">
+              <button id="marketingRepliesBtn" class="marketing-secondary" type="button">
+                View marketing replies
+              </button>
+              <button id="marketingRefreshBtn" class="marketing-primary" type="button">
+                Refresh data
+              </button>
+            </div>
+          </header>
+
+          <section class="marketing-stats" aria-label="Marketing overview">
+            <article class="marketing-stat marketing-stat--campaigns">
+              <span>Campaigns</span>
+              <strong id="marketingCampaigns">0</strong>
+              <small>Recorded sends</small>
+            </article>
+            <article class="marketing-stat marketing-stat--sent">
+              <span>Messages sent</span>
+              <strong id="marketingSent">0</strong>
+              <small>Accepted by WhatsApp</small>
+            </article>
+            <article class="marketing-stat marketing-stat--replies">
+              <span>Customer replies</span>
+              <strong id="marketingReplies">0</strong>
+              <small>Unique campaign replies</small>
+            </article>
+            <article class="marketing-stat marketing-stat--rate">
+              <span>Response rate</span>
+              <strong id="marketingResponseRate">0%</strong>
+              <small>Replies ÷ messages sent</small>
+            </article>
+            <article class="marketing-stat marketing-stat--failed">
+              <span>Failed</span>
+              <strong id="marketingFailed">0</strong>
+              <small>Needs attention</small>
+            </article>
+          </section>
+
+          <section class="marketing-history-card">
+            <header>
+              <div>
+                <h3>Marketing activity</h3>
+                <p id="marketingUpdatedAt">Open this section to load campaign data.</p>
+              </div>
+              <span id="marketingHistoryCount" class="marketing-count">0 campaigns</span>
+            </header>
+            <div id="marketingHistory" class="marketing-history" aria-live="polite">
+              <div class="marketing-empty">
+                <strong>Your campaign history will appear here.</strong>
+                <span>Marketing sends are saved automatically.</span>
+              </div>
+            </div>
+          </section>
+        </section>
+        <section
+          class="performance-board"
+          aria-label="Sales performance dashboard"
+        >
+          <button
+            class="performance-stat stat-total"
+            type="button"
+            data-metric-filter="total"
+            aria-pressed="false"
+          >
+            <span><i aria-hidden="true"></i>Total</span>
+            <strong id="metricTotal">0</strong>
+          </button>
+          <button
+            class="performance-stat stat-won"
+            type="button"
+            data-metric-filter="won"
+            aria-pressed="false"
+          >
+            <span><i aria-hidden="true"></i>Won</span>
+            <strong id="metricWon">0</strong>
+          </button>
+          <button
+            class="performance-stat stat-lost"
+            type="button"
+            data-metric-filter="lost"
+            aria-pressed="false"
+          >
+            <span><i aria-hidden="true"></i>Lost</span>
+            <strong id="metricLost">0</strong>
+          </button>
+          <article
+            class="performance-stat stat-rate"
+            aria-label="Win rate: won divided by total leads"
+            title="Won / Total Leads"
+          >
+            <span><i aria-hidden="true"></i>Win Rate</span>
+            <strong id="metricWinRate">0.00%</strong>
+            <small>Won / Total Leads</small>
+          </article>
+        </section>
+
+        <section class="metrics-grid" aria-label="Metrics">
+          <button
+            class="metric"
+            type="button"
+            data-metric-filter="open"
+            aria-pressed="false"
+          >
+            <span>Open</span>
+            <strong id="metricOpen">0</strong>
+          </button>
+          <button
+            class="metric"
+            type="button"
+            data-metric-filter="new"
+            aria-pressed="false"
+          >
+            <span>New</span>
+            <strong id="metricNew">0</strong>
+          </button>
+          <button
+            class="metric"
+            type="button"
+            data-metric-filter="hot"
+            aria-pressed="false"
+          >
+            <span>Hot</span>
+            <strong id="metricHot">0</strong>
+          </button>
+          <button
+            class="metric"
+            type="button"
+            data-metric-filter="follow"
+            aria-pressed="false"
+          >
+            <span>Follow Up / Interested</span>
+            <strong id="metricFollow">0</strong>
+          </button>
+          <button
+            class="metric"
+            type="button"
+            data-metric-filter="quotation"
+            aria-pressed="false"
+          >
+            <span>Quotation</span>
+            <strong id="metricQuotation">0</strong>
+          </button>
+          <button
+            class="metric"
+            type="button"
+            data-metric-filter="future"
+            aria-pressed="false"
+          >
+            <span>Future</span>
+            <strong id="metricFuture">0</strong>
+          </button>
+          <button
+            class="metric"
+            type="button"
+            data-metric-filter="dueToday"
+            aria-pressed="false"
+          >
+            <span>Due Today</span>
+            <strong id="metricDueToday">0</strong>
+          </button>
+        </section>
+
+        <section class="work-area">
+          <section class="lead-panel" id="leadPanel">
+            <div class="panel-header lead-header">
+              <div>
+                <div class="lead-title-row">
+                  <h2>Leads</h2>
+                  <button
+                    id="toggleLeadControlsBtn"
+                    class="lead-controls-toggle"
+                    type="button"
+                    aria-expanded="true"
+                    aria-controls="leadHeaderActions leadFilters"
+                    aria-label="Hide lead filters"
+                    title="Hide lead filters"
+                  >
+                    <span aria-hidden="true">⌃</span>
+                  </button>
+                </div>
+                <p id="leadSummary">Connect to load leads</p>
+              </div>
+              <div class="lead-header-actions" id="leadHeaderActions">
+                <label class="lead-month-control">
+                  <span>Lead Month</span>
+                  <select id="monthFilter" aria-label="Lead creation month">
+                    <option value="">All months</option>
+                  </select>
+                </label>
+                <button
+                  id="refreshBtn"
+                  class="primary-action compact"
+                  type="button"
+                >
+                  Refresh
+                </button>
+              </div>
+            </div>
+
+            <div class="filters" id="leadFilters" aria-label="Lead filters">
+              <input
+                id="searchInput"
+                type="search"
+                placeholder="Search name, phone, city, requirement"
+              />
+              <select id="assigneeFilter">
+                <option value="">All owners</option>
+                <option value="ankit">Ankit</option>
+                <option value="reshu">Reshu</option>
+                <option value="shubham">Shubham</option>
+              </select>
+              <select id="statusFilter">
+                <option value="">All status</option>
+                <option value="fresh_untouched">Fresh Untouched</option>
+                <option value="new">New</option>
+                <option value="follow_up">Follow Up</option>
+                <option value="quotation_sent">Quotation Sent</option>
+                <option value="future">Future</option>
+                <option value="interested">Interested</option>
+                <option value="converted">Won</option>
+                <option value="lost">Lost</option>
+              </select>
+              <select id="temperatureFilter">
+                <option value="">All temperature</option>
+                <option value="hot">Hot</option>
+                <option value="warm">Warm</option>
+                <option value="cold">Cold</option>
+              </select>
+              <select id="sortSelect">
+                <option value="priority">Work Priority</option>
+                <option value="newest">Newest</option>
+                <option value="score">Score</option>
+                <option value="followup">Follow Up</option>
+              </select>
+            </div>
+
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Number / Name</th>
+                    <th>Status</th>
+                    <th>Temp / Score</th>
+                  </tr>
+                </thead>
+                <tbody id="leadRows"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <aside class="detail-panel" id="detailPanel">
+            <div class="panel-header">
+              <h2>Lead Detail</h2>
+              <button id="closeDetailBtn" class="ghost-button" type="button">
+                Close
+              </button>
+            </div>
+            <div id="detailContent" class="detail-empty">Select a lead</div>
+          </aside>
+        </section>
+      </main>
+    </div>
+
+    <script src="assets/app.js?v=10-firestore-delta-sync"></script>
+    <script src="assets/jspdf.umd.min.js?v=4.2.1"></script>
+    <script type="module" src="assets/whatsapp.js?v=38-marketing-workspace"></script>
+  </body>
+</html>

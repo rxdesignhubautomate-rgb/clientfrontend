@@ -1,0 +1,1851 @@
+/* Fresh CRM theme: midnight navigation, cool surfaces, and teal accents. */
+body.dashboard-mode {
+  --bg: #f2f6fc;
+  --surface: #ffffff;
+  --surface-2: #eef3fb;
+  --text: #172a46;
+  --muted: #5d7089;
+  --line: #dce5f1;
+  --brand: #087f8c;
+  --brand-2: #1f5974;
+  --shadow: 0 2px 8px rgba(27, 60, 103, 0.05);
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", Helvetica, Arial, sans-serif;
+}
+.dashboard-mode .topbar { border-color: var(--line); }
+.dashboard-mode .topbar h1 { font-weight: 600; letter-spacing: -0.3px; }
+.dashboard-mode .eyebrow {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+}
+
+/* Keep the compact card sizes, with one clear selected state. */
+.dashboard-mode :is(.performance-stat, .metric) {
+  border-color: var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  box-shadow: none;
+  animation: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+.dashboard-mode :is(.performance-stat, .metric):hover {
+  transform: none;
+  border-color: #a8c9e6;
+  background: #f8fcff;
+  box-shadow: none;
+}
+.dashboard-mode :is(.performance-stat, .metric).active {
+  border-color: #86cbd7;
+  background: #eaf6fc;
+  box-shadow: inset 3px 0 #087f8c;
+}
+.dashboard-mode :is(.performance-stat, .metric):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+  box-shadow: none;
+}
+.dashboard-mode :is(.performance-stat, .metric) span {
+  color: #506684;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-transform: none;
+}
+.dashboard-mode :is(.performance-stat, .metric) strong {
+  color: #152949;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+}
+.dashboard-mode .performance-stat i {
+  width: 6px;
+  height: 6px;
+  background: #809cc4;
+  box-shadow: none;
+}
+.dashboard-mode .stat-won i,
+.dashboard-mode .stat-rate i { background: #1394a5; }
+.dashboard-mode .stat-lost i { background: #b5756b; }
+.dashboard-mode .performance-stat small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+.dashboard-mode .stat-rate:hover {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.dashboard-mode .work-area { color: var(--text); gap: 12px; }
+.dashboard-mode .work-area :is(.lead-panel, .detail-panel) {
+  border-color: var(--line);
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: var(--shadow);
+}
+.dashboard-mode .work-area .panel-header {
+  padding: 12px 14px;
+  background: #fff;
+  border-radius: 11px 11px 0 0;
+}
+.dashboard-mode .work-area h2 {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.2px;
+}
+.dashboard-mode .lead-header p {
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.dashboard-mode .work-area label {
+  min-width: 0;
+  color: #506684;
+  font-size: 12px;
+  font-weight: 600;
+}
+.dashboard-mode .work-area :is(input, select, textarea) {
+  border-color: #d7e2f1;
+  border-radius: 8px;
+  color: #172a46;
+  background: #fff;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+}
+.dashboard-mode .work-area :is(input, select, textarea):focus {
+  border-color: #209bac;
+  box-shadow: 0 0 0 2px rgba(8, 127, 140, 0.1);
+}
+.dashboard-mode .work-area :is(.primary-action, .ghost-button) {
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.dashboard-mode .work-area .primary-action { background: #087f8c; }
+.dashboard-mode .work-area .primary-action:hover { background: #086471; }
+.dashboard-mode .work-area .ghost-button {
+  border-color: #d7e2f1;
+  background: #fff;
+  color: #24667e;
+}
+.dashboard-mode .work-area .ghost-button:hover {
+  background: #eef8fc;
+  border-color: #a0cddd;
+}
+.dashboard-mode .work-area button:focus-visible {
+  outline: 2px solid #087f8c;
+  outline-offset: 2px;
+}
+.dashboard-mode .lead-month-control > span {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.dashboard-mode .filters {
+  gap: 8px;
+  padding: 10px 14px;
+  background: #f6f9fe;
+}
+.dashboard-mode .filters #searchInput { background: #fff; }
+.dashboard-mode .work-area :is(input, textarea)::placeholder {
+  color: #60748e;
+  opacity: 1;
+}
+
+/* Calm table surfaces and readable metadata, with alerts kept distinct. */
+.dashboard-mode .lead-panel th {
+  padding: 10px 14px;
+  background: #edf3fc;
+  color: #506684;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: none;
+}
+.dashboard-mode .lead-panel td {
+  padding: 11px 14px;
+  font-size: 14px;
+  line-height: 1.45;
+  border-bottom-color: #e8eef7;
+}
+.dashboard-mode .lead-panel tbody tr:nth-child(even) { background: #fafcff; }
+.dashboard-mode .lead-panel tbody tr:hover,
+.dashboard-mode .lead-panel tbody tr:focus-within { background: #eaf6fc; }
+.dashboard-mode .customer-phone {
+  color: #152949;
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-mode .customer-name {
+  color: #506680;
+  font-size: 13px;
+  font-weight: 500;
+}
+.dashboard-mode .customer-sub {
+  color: #5d7089;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.dashboard-mode .work-area :is(.chip, .next-action) { font-weight: 500; }
+.dashboard-mode .work-area .chip:not(.hot):not(.warm):not(.cold) {
+  background: #edf2fc;
+  color: #3c5878;
+}
+.dashboard-mode .work-area .chip.hot { background: #f8ece8; color: #9b483c; }
+.dashboard-mode .work-area .chip.warm { background: #faf1df; color: #8b661e; }
+.dashboard-mode .work-area .chip.cold { background: #edf1f3; color: #526875; }
+.dashboard-mode .work-area .next-action.overdue {
+  color: #9b483c;
+  background: #faefec;
+}
+.dashboard-mode .work-area .issue-badge {
+  font-weight: 500;
+  letter-spacing: 0;
+  line-height: 1.35;
+}
+.dashboard-mode .work-area .issue-badge.mistake {
+  color: #9b483c;
+  background: #fff8f6;
+  border-color: #ead3cc;
+}
+.dashboard-mode .last-touch { font-size: 12px; }
+
+/* Keep the lead heading visible while reading its conversation. */
+.dashboard-mode .work-area .detail-panel {
+  border-color: #a7c8e4;
+  box-shadow: 0 3px 16px rgba(33, 83, 137, 0.1);
+}
+.dashboard-mode .detail-panel > .panel-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #182e51;
+  border-bottom: 3px solid #73d8e2;
+  color: #fff;
+}
+.dashboard-mode .detail-panel > .panel-header h2 {
+  color: #fff;
+  font-weight: 600;
+}
+.dashboard-mode .detail-panel > .panel-header .ghost-button {
+  background: #fff;
+  color: #182e51;
+  border-color: #fff;
+}
+.dashboard-mode .detail-panel > .panel-header .ghost-button:hover {
+  background: #e9f8fc;
+  border-color: #e9f8fc;
+}
+.dashboard-mode .detail-panel > .panel-header button:focus-visible {
+  outline-color: #fff;
+}
+.dashboard-mode .detail-body {
+  background: #fbfdff;
+}
+.dashboard-mode .detail-issues .issue-badge {
+  padding: 4px 9px;
+  font-weight: 600;
+}
+.dashboard-mode .customer-journey {
+  border-color: #c9dfed;
+  border-radius: 10px;
+  background: #edf6fc;
+}
+.dashboard-mode .journey-heading { flex-wrap: wrap; }
+.dashboard-mode .journey-heading h3 { color: #285878; font-weight: 600; }
+.dashboard-mode .journey-grid div {
+  background: #fff;
+  border-left: 3px solid #90b9d7;
+}
+.dashboard-mode .journey-grid div:nth-child(3) {
+  background: #f6f1ff;
+  border-left-color: #b296d5;
+}
+.dashboard-mode .journey-grid div:nth-child(4) {
+  background: #fff8e9;
+  border-left-color: #d8b46a;
+}
+.dashboard-mode .journey-grid span {
+  color: #506680;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: none;
+}
+.dashboard-mode .journey-grid strong { font-size: 13px; font-weight: 600; }
+.dashboard-mode .detail-grid .detail-phone-label {
+  color: #182e51;
+}
+.dashboard-mode .detail-phone-label input {
+  border-color: #9cd6dc;
+  border-left: 4px solid #2096a5;
+  background: #e7f8fa;
+  color: #115c67;
+  font-size: 16px;
+  font-weight: 600;
+}
+.dashboard-mode .detail-grid > label:has(#detailFollow) {
+  padding: 9px 10px;
+  border: 1px solid #ead19b;
+  border-left: 4px solid #c99a39;
+  border-radius: 10px;
+  background: #fff7e5;
+  color: #78541b;
+}
+.dashboard-mode .detail-grid #detailFollow {
+  border-color: #e6cf9f;
+  color: #78541b;
+  font-weight: 600;
+}
+/* Red reflects the existing overdue state, rather than every follow-up date. */
+.dashboard-mode .detail-body:has(.customer-journey .next-action.overdue) label:has(#detailFollow) {
+  border-color: #e6b8ae;
+  border-left-color: #be6653;
+  background: #fff0eb;
+  color: #923f30;
+}
+.dashboard-mode .detail-body:has(.customer-journey .next-action.overdue) #detailFollow {
+  border-color: #e6b8ae;
+  color: #923f30;
+}
+.dashboard-mode .detail-grid #detailRequirement {
+  border-color: #d7c9eb;
+  background: #faf7ff;
+}
+.dashboard-mode .detail-grid #detailNote {
+  border-color: #e5d7b4;
+  background: #fffcf3;
+}
+.dashboard-mode .detail-grid :is(input, select, textarea):focus {
+  border-color: #087f8c;
+  box-shadow: 0 0 0 3px rgba(8, 127, 140, 0.14);
+}
+.dashboard-mode .quick-follow .ghost-button { font-size: 11px; }
+.dashboard-mode .detail-body > h3 {
+  margin: 20px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: 15px;
+  font-weight: 600;
+}
+.dashboard-mode .detail-actions { flex-wrap: wrap; }
+.dashboard-mode .message-list {
+  padding: 12px;
+  gap: 12px;
+  border: 1px solid #dce7f3;
+  border-radius: 10px;
+  background: #edf2f9;
+}
+.dashboard-mode .message-list .message {
+  justify-self: start;
+  min-width: 0;
+  max-width: 94%;
+  padding: 10px 12px;
+  border: 1px solid #dce6f1;
+  border-radius: 3px 10px 10px;
+  color: #243957;
+  background: #fff;
+  font-size: 14px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  box-shadow: 0 1px 1px rgba(27, 60, 103, 0.04);
+}
+.dashboard-mode .message-list .message:is(.ai, .sales, .broadcast) {
+  justify-self: end;
+  border-color: #b9dfdf;
+  border-radius: 10px 3px 10px 10px;
+  background: #def4f2;
+}
+.dashboard-mode .message-list .message small {
+  margin-bottom: 6px;
+  color: #506a80;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.dashboard-mode .work-area :is(.table-wrap, .detail-panel) {
+  scrollbar-width: thin;
+  scrollbar-color: #adc0d8 transparent;
+}
+@media (max-width: 700px) {
+  .dashboard-mode .message-list { padding: 8px; }
+  .dashboard-mode .message-list .message { max-width: 98%; }
+}
+
+/* Shared rail keeps identical dimensions and position in both workspaces. */
+#workspaceRail.wa-rail {
+  background: #101e37;
+  border-right-color: #253956;
+  color: #b9cde9;
+}
+#workspaceRail .wa-rail-button {
+  color: #b9cde9;
+  border-radius: 13px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+#workspaceRail .wa-rail-button:hover {
+  background: #223a59;
+  color: #fff;
+}
+#workspaceRail .wa-rail-button.selected {
+  background: #69e2da;
+  color: #102840;
+  box-shadow: 0 0 0 4px rgba(67, 220, 210, 0.1);
+}
+#workspaceRail .wa-rail-button:focus-visible {
+  outline: 2px solid #69e2da;
+  outline-offset: 3px;
+}
+#workspaceRail .wa-rail-brand {
+  background: #223a59;
+  color: #87ede2;
+  border: 1px solid #3a6c7c;
+  border-radius: 11px;
+}
+#workspaceRail .wa-rail-badge {
+  background: #69e2da;
+  color: #102840;
+  border-color: #101e37;
+}
+
+/* Cool KPI tones retain the same compact, clickable cards. */
+.dashboard-mode {
+  background-image: radial-gradient(ellipse at 100% 0, #e1edff 0, transparent 55%);
+}
+.dashboard-mode .topbar {
+  background: #fff;
+  box-shadow: 0 1px 8px rgba(37, 73, 116, 0.04);
+}
+.dashboard-mode .eyebrow { color: #087f8c; letter-spacing: 1px; }
+.dashboard-mode .performance-stat { border-radius: 12px; }
+.dashboard-mode .performance-stat:not(.active) { box-shadow: 0 3px 12px rgba(35, 66, 110, 0.04); }
+.dashboard-mode .stat-total:not(.active) { background: #f3f8ff; }
+.dashboard-mode .stat-won:not(.active) { background: #effbf9; }
+.dashboard-mode .stat-lost:not(.active) { background: #fff6f8; }
+.dashboard-mode .stat-rate:not(.active) { background: #f6f3ff; }
+.dashboard-mode .stat-total strong { color: #27569b; }
+.dashboard-mode .stat-won strong { color: #08786e; }
+.dashboard-mode .stat-lost strong { color: #a34960; }
+.dashboard-mode .stat-rate strong { color: #6750a6; }
+.dashboard-mode .stat-total i { background: #538ceb; }
+.dashboard-mode .stat-won i { background: #26ac99; }
+.dashboard-mode .stat-lost i { background: #cd7189; }
+.dashboard-mode .stat-rate i { background: #9775d2; }
+.dashboard-mode :is(.performance-stat, .metric).active {
+  background: #e8f7fc;
+  border-color: #64b9ca;
+  box-shadow: inset 3px 0 #087f8c, 0 2px 8px rgba(8, 127, 140, 0.06);
+}
+.dashboard-mode .work-area .primary-action {
+  box-shadow: 0 3px 8px rgba(8, 127, 140, 0.13);
+}
+.dashboard-mode .action-card {
+  background: #f0f5fd;
+  border: 1px solid #d3e1f3;
+  border-left: 3px solid #6797ca;
+  box-shadow: none;
+}
+.dashboard-mode .action-card :is(strong, span) { color: #314d74; }
+.dashboard-mode .action-card:is(.issue-overdue, .mistake) { border-left-color: #c86f7e; background: #fff4f6; }
+.dashboard-mode .action-card.issue-dueToday { border-left-color: #22a99e; background: #effbf8; }
+.dashboard-mode .action-card.issue-hotIdle { border-left-color: #df7c4f; background: #fff5ee; }
+.dashboard-mode .action-card.issue-quotePending { border-left-color: #8c6ed0; background: #f7f3ff; }
+.dashboard-mode .action-card:is(.issue-noFollowDate, .uncovered) { border-left-color: #c29a50; background: #fff9ed; }
+.dashboard-mode .action-card.issue-noNote { border-left-color: #6f79d2; background: #f3f4ff; }
+.dashboard-mode .action-card.issue-unassigned { border-left-color: #4f8cc9; background: #f1f7ff; }
+.dashboard-mode .action-card.issue-untouchedNew { border-left-color: #27a8bd; background: #effbfc; }
+.dashboard-mode .action-card:is(.issue-silent72, .issue-repeat30, .opportunity) { border-left-color: #4ba99c; background: #effbf8; }
+.dashboard-mode .action-card:hover { transform: none; filter: none; box-shadow: none; }
+.dashboard-mode .action-card.active { outline: 2px solid #087f8c; outline-offset: 1px; }
+.wa-account-button { background: #f0f6fc; border-color: #d3e1ee; color: #24667e; }
+.show-account .connection-band {
+  --brand: #087f8c;
+  --brand-2: #24667e;
+  --line: #dce5f1;
+  border-color: #b8d3e7;
+  box-shadow: 0 20px 70px rgba(16, 30, 55, 0.24);
+}
+
+/* The light inbox shares the dashboard palette; saved dark themes stay intact. */
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) {
+  --wx-bg: #fff;
+  --wx-panel: #eff4fc;
+  --wx-text: #172a46;
+  --wx-muted: #536780;
+  --wx-line: #dce5f1;
+  --wx-accent: #087f8c;
+  --wa-dark: #172a46;
+  color: #172a46;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]))
+  :is(.wa-inbox-header, .wa-thread-header, .wa-drawer > header, .wa-composer, .wa-compose-status, .wa-inbox-footer) {
+  background: #f3f7fe;
+  border-color: #dce5f1;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]))
+  :is(.wa-inbox-header h2, .wa-contact strong, .wa-chat-line strong, .wa-welcome h2) { color: #172a46; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-icon-btn { color: #56708c; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-search {
+  background: #edf3fc;
+  border: 1px solid #dee8f6;
+  border-radius: 12px;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-search input { color: #243957; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-filters button {
+  background: #eff4fc;
+  color: #536c89;
+  border-radius: 10px;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-filters button[aria-pressed="true"] {
+  background: #dff6f2;
+  color: #096b70;
+  box-shadow: inset 0 0 0 1px #a5dcd5;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-chat-row:hover { background: #f2f7fd; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-chat-row.active {
+  background: #e8f4fc;
+  box-shadow: inset 3px 0 #209eac;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-chat-summary { border-bottom-color: #e8eef7; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]))
+  :is(.wa-chat-preview, .wa-contact span, .wa-message-meta, .wa-chat-line time) { color: #536780; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-chat-row:has(.wa-unread) .wa-chat-line time { color: #087970; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-unread { background: #7ce3cf; color: #103e3c; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]))
+  :is(.wa-text-button, .wa-compose-status button, .wa-draft-label) { color: #087f8c; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-conversation {
+  background: #edf3fc;
+  border-color: #dce5f1;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]):is([data-wallpaper="default"], :not([data-wallpaper]))) .wa-messages {
+  background-color: #edf3fc;
+  background-image: radial-gradient(#d4e1f1 0.7px, transparent 0.7px);
+  background-size: 24px 24px;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-day {
+  background: #fff;
+  color: #536c89;
+  border: 1px solid #dce5f1;
+  border-radius: 10px;
+  box-shadow: 0 2px 6px rgba(35, 66, 110, 0.04);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-bubble {
+  color: #243957;
+  border-radius: 3px 12px 12px;
+  box-shadow: 0 2px 5px rgba(32, 62, 100, 0.07);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .outgoing .wa-bubble {
+  background: #daf5ef;
+  border-radius: 12px 3px 12px 12px;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .outgoing .wa-bubble::before { background: #daf5ef; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-composer textarea {
+  border: 1px solid #dce5f1;
+  border-radius: 12px;
+  box-shadow: 0 2px 6px rgba(35, 66, 110, 0.03);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-send {
+  background: #087f8c;
+  box-shadow: 0 3px 10px rgba(8, 127, 140, 0.18);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-send:hover { background: #086471; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-welcome {
+  background: #f4f8fe;
+  border-color: #dce5f1;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-welcome-mark {
+  background: #dff6f2;
+  color: #087f8c;
+  border-radius: 24px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Sales Command Center — energetic, futuristic, and still readable.  */
+/* ------------------------------------------------------------------ */
+body.dashboard-mode {
+  background-color: #eef3fb;
+  background-image:
+    radial-gradient(circle at 82% -8%, rgba(90, 106, 255, 0.16), transparent 32%),
+    radial-gradient(circle at 17% 14%, rgba(24, 197, 190, 0.1), transparent 28%),
+    linear-gradient(rgba(93, 121, 167, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(93, 121, 167, 0.045) 1px, transparent 1px);
+  background-size: auto, auto, 34px 34px, 34px 34px;
+}
+
+.dashboard-mode .topbar {
+  position: relative;
+  overflow: hidden;
+  min-height: 82px;
+  padding: 14px 58px 14px 24px;
+  border-bottom: 1px solid #263d63;
+  background:
+    radial-gradient(circle at 78% -35%, rgba(66, 224, 210, 0.25), transparent 33%),
+    linear-gradient(120deg, #101d35 0%, #192f55 58%, #123f56 100%);
+  box-shadow: 0 10px 30px rgba(22, 42, 78, 0.16);
+}
+
+.dashboard-mode .topbar::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, #42dfd2, #6984ff 52%, #b66df5);
+}
+
+.dashboard-mode .topbar h1 {
+  color: #f8fbff;
+  font-size: 24px;
+  font-weight: 650;
+  letter-spacing: -0.6px;
+}
+
+.dashboard-mode .topbar .eyebrow {
+  margin-bottom: 5px;
+  color: #70e9df;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+}
+
+.dashboard-mode .topbar .status-pill {
+  border-color: rgba(114, 234, 220, 0.34);
+  background: rgba(22, 59, 76, 0.72);
+  color: #8ff2e6;
+  box-shadow: inset 0 0 0 1px rgba(115, 232, 219, 0.05);
+}
+
+.dashboard-mode .topbar .status-pill.ok {
+  border-color: rgba(114, 234, 220, 0.44);
+  background: rgba(13, 93, 89, 0.48);
+  color: #a2fff2;
+}
+
+.dashboard-mode .topbar .status-pill.bad {
+  border-color: rgba(255, 148, 167, 0.45);
+  background: rgba(122, 41, 65, 0.48);
+  color: #ffd0da;
+}
+
+.dashboard-mode .topbar :is(.notify-bell, .wa-account-button) {
+  border-color: rgba(172, 202, 235, 0.25);
+  background: rgba(255, 255, 255, 0.09);
+  color: #e9f4ff;
+  backdrop-filter: blur(10px);
+}
+
+.dashboard-mode .topbar :is(.notify-bell, .wa-account-button):hover {
+  border-color: rgba(112, 233, 221, 0.58);
+  background: rgba(112, 233, 221, 0.13);
+}
+
+.dashboard-mode .topbar .notify-bell .bell-icon {
+  filter: none;
+  opacity: 0.9;
+}
+
+.dashboard-mode .top-hide-button {
+  border-color: rgba(169, 203, 235, 0.34);
+  background: rgba(16, 30, 55, 0.78);
+  color: #8dece5;
+  box-shadow: 0 6px 18px rgba(9, 23, 45, 0.22);
+  backdrop-filter: blur(10px);
+}
+
+.dashboard-mode main {
+  padding-top: 16px;
+}
+
+.dashboard-mode .performance-board {
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.dashboard-mode .performance-stat {
+  isolation: isolate;
+  min-height: 70px;
+  padding: 11px 14px;
+  overflow: hidden;
+  border: 1px solid rgba(146, 180, 220, 0.24);
+  border-radius: 15px;
+  background: linear-gradient(135deg, #172946, #213b65);
+  color: #fff;
+  box-shadow: 0 8px 22px rgba(24, 45, 82, 0.13);
+  animation: command-card-in 0.36s ease both;
+}
+
+.dashboard-mode .performance-stat:nth-child(2) { animation-delay: 0.045s; }
+.dashboard-mode .performance-stat:nth-child(3) { animation-delay: 0.09s; }
+.dashboard-mode .performance-stat:nth-child(4) { animation-delay: 0.135s; }
+
+.dashboard-mode .performance-stat::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: -34px;
+  right: -18px;
+  width: 116px;
+  height: 116px;
+  border-radius: 50%;
+  background: var(--command-glow, rgba(72, 132, 255, 0.3));
+  filter: blur(6px);
+}
+
+.dashboard-mode .stat-total { --command-glow: rgba(72, 132, 255, 0.38); }
+.dashboard-mode .stat-won { --command-glow: rgba(34, 218, 188, 0.34); }
+.dashboard-mode .stat-lost { --command-glow: rgba(237, 94, 139, 0.3); }
+.dashboard-mode .stat-rate { --command-glow: rgba(173, 103, 245, 0.34); }
+
+.dashboard-mode .performance-stat:not(.active),
+.dashboard-mode .stat-total:not(.active),
+.dashboard-mode .stat-won:not(.active),
+.dashboard-mode .stat-lost:not(.active),
+.dashboard-mode .stat-rate:not(.active) {
+  background: linear-gradient(135deg, #172946, #213b65);
+}
+
+.dashboard-mode .performance-stat:hover,
+.dashboard-mode .stat-rate:hover {
+  transform: translateY(-2px);
+  border-color: rgba(113, 231, 221, 0.62);
+  background: linear-gradient(135deg, #1a3153, #25456f);
+  box-shadow: 0 12px 28px rgba(24, 45, 82, 0.2);
+}
+
+.dashboard-mode .performance-stat.active {
+  border-color: #68e1d7;
+  background: linear-gradient(135deg, #14455b, #17656a);
+  box-shadow: inset 3px 0 #82f3e9, 0 10px 26px rgba(8, 127, 140, 0.2);
+}
+
+.dashboard-mode .performance-stat span,
+.dashboard-mode .performance-stat small {
+  position: relative;
+  z-index: 1;
+  color: #bdcce1;
+}
+
+.dashboard-mode .performance-stat span {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.dashboard-mode .performance-stat strong,
+.dashboard-mode :is(.stat-total, .stat-won, .stat-lost, .stat-rate) strong {
+  position: relative;
+  z-index: 1;
+  color: #fff;
+  font-size: 27px;
+  font-weight: 650;
+}
+
+.dashboard-mode .performance-stat i {
+  width: 7px;
+  height: 7px;
+  background: #6aa3ff;
+  box-shadow: 0 0 10px #6aa3ff;
+}
+
+.dashboard-mode .stat-won i { background: #4ee5ca; box-shadow: 0 0 10px #4ee5ca; }
+.dashboard-mode .stat-lost i { background: #ff84a9; box-shadow: 0 0 10px #ff84a9; }
+.dashboard-mode .stat-rate i { background: #cf92ff; box-shadow: 0 0 10px #cf92ff; }
+
+.dashboard-mode .metrics-grid {
+  gap: 9px;
+  margin-bottom: 14px;
+}
+
+.dashboard-mode .metric {
+  --metric-accent: #5f8fe9;
+  --metric-text: #2759a5;
+  --metric-soft: #f2f7ff;
+  position: relative;
+  min-height: 53px;
+  padding: 9px 11px 9px 15px;
+  overflow: hidden;
+  border: 1px solid #dbe5f3;
+  border-radius: 13px;
+  background: linear-gradient(145deg, #fff, var(--metric-soft));
+  box-shadow: 0 5px 14px rgba(34, 67, 108, 0.055);
+}
+
+.dashboard-mode .metric:nth-child(2) { --metric-accent: #27a8bd; --metric-text: #08737d; --metric-soft: #effbfc; }
+.dashboard-mode .metric:nth-child(3) { --metric-accent: #e77755; --metric-text: #a2472f; --metric-soft: #fff6f1; }
+.dashboard-mode .metric:nth-child(4) { --metric-accent: #8d69d8; --metric-text: #6342a4; --metric-soft: #f7f3ff; }
+.dashboard-mode .metric:nth-child(5) { --metric-accent: #5674d8; --metric-text: #4059af; --metric-soft: #f2f4ff; }
+.dashboard-mode .metric:nth-child(6) { --metric-accent: #2c9c83; --metric-text: #1e7160; --metric-soft: #f0faf6; }
+.dashboard-mode .metric:nth-child(7) { --metric-accent: #d59736; --metric-text: #805c16; --metric-soft: #fff9ed; }
+
+.dashboard-mode .metric::before {
+  content: "";
+  position: absolute;
+  inset: 9px auto 9px 0;
+  width: 4px;
+  border-radius: 0 5px 5px 0;
+  background: var(--metric-accent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--metric-accent) 55%, transparent);
+}
+
+.dashboard-mode .metric:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--metric-accent) 48%, #dbe5f3);
+  background: var(--metric-soft);
+  box-shadow: 0 9px 20px rgba(34, 67, 108, 0.1);
+}
+
+.dashboard-mode .metric.active {
+  border-color: var(--metric-accent);
+  background: var(--metric-soft);
+  box-shadow: inset 3px 0 var(--metric-accent), 0 7px 18px rgba(34, 67, 108, 0.1);
+}
+
+.dashboard-mode .metric span {
+  color: #566a86;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.dashboard-mode .metric strong {
+  color: var(--metric-text);
+  font-size: 23px;
+  font-weight: 700;
+}
+
+.dashboard-mode .work-area {
+  gap: 14px;
+}
+
+.dashboard-mode .work-area :is(.lead-panel, .detail-panel) {
+  border: 1px solid rgba(188, 207, 230, 0.78);
+  border-radius: 17px;
+  box-shadow: 0 12px 34px rgba(31, 61, 101, 0.09);
+}
+
+.dashboard-mode .lead-panel > .panel-header {
+  min-height: 76px;
+  padding: 13px 15px;
+  border-bottom-color: #dce7f4;
+  border-radius: 16px 16px 0 0;
+  background:
+    radial-gradient(circle at 82% 0, rgba(71, 197, 204, 0.14), transparent 34%),
+    linear-gradient(125deg, #fff, #f2f7ff);
+}
+
+.dashboard-mode .lead-header h2 {
+  color: #1a3153;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.dashboard-mode .lead-header h2::after {
+  content: "";
+  display: inline-block;
+  width: 26px;
+  height: 4px;
+  margin: 0 0 4px 9px;
+  border-radius: 9px;
+  background: linear-gradient(90deg, #22b8bd, #6c7df0);
+}
+
+.dashboard-mode .filters {
+  gap: 9px;
+  padding: 11px 14px;
+  border-bottom-color: #dce7f4;
+  background: rgba(238, 244, 253, 0.88);
+  backdrop-filter: blur(12px);
+}
+
+.dashboard-mode .filters :is(input, select),
+.dashboard-mode .lead-month-control select {
+  min-height: 39px;
+  border: 1px solid #d4e0ef;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.dashboard-mode .work-area .primary-action {
+  border: 0;
+  background: linear-gradient(135deg, #0b8d98, #08717f);
+  box-shadow: 0 6px 14px rgba(8, 127, 140, 0.2);
+}
+
+.dashboard-mode .work-area .primary-action:hover {
+  background: linear-gradient(135deg, #0aa2a9, #087884);
+  box-shadow: 0 8px 18px rgba(8, 127, 140, 0.28);
+}
+
+.dashboard-mode .lead-panel th {
+  background: #eaf1fb;
+  color: #48617f;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.25px;
+  text-transform: uppercase;
+}
+
+.dashboard-mode .lead-panel tbody tr {
+  transition: background-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dashboard-mode .lead-panel tbody tr:nth-child(even) {
+  background: #fbfcff;
+}
+
+.dashboard-mode .lead-panel tbody tr:hover,
+.dashboard-mode .lead-panel tbody tr:focus-within {
+  background: linear-gradient(90deg, #e8f8f7, #f4f8ff);
+  box-shadow: inset 4px 0 #1ca4ac;
+}
+
+.dashboard-mode .lead-panel tbody tr.has-issues td:first-child {
+  box-shadow: inset 3px 0 #e18767;
+}
+
+.dashboard-mode .detail-panel > .panel-header {
+  min-height: 61px;
+  padding: 11px 14px;
+  border-bottom: 2px solid #62dfd6;
+  border-radius: 16px 16px 0 0;
+  background:
+    radial-gradient(circle at 82% -45%, rgba(122, 224, 219, 0.32), transparent 40%),
+    linear-gradient(125deg, #172b4d, #20496a);
+}
+
+.dashboard-mode .detail-panel > .panel-header h2 {
+  font-size: 19px;
+  letter-spacing: 0.1px;
+}
+
+.dashboard-mode .customer-journey {
+  padding: 13px;
+  border-color: #c9d9ef;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #edf7ff, #f5f1ff);
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.9);
+}
+
+.dashboard-mode .journey-grid div {
+  min-height: 56px;
+  border: 1px solid #e0e8f3;
+  border-left: 4px solid #65a4df;
+  border-radius: 10px;
+  box-shadow: 0 3px 8px rgba(46, 78, 118, 0.05);
+}
+
+.dashboard-mode .journey-grid div:nth-child(2) { border-left-color: #22a99e; background: #effbf8; }
+.dashboard-mode .journey-grid div:nth-child(3) { border-left-color: #956ed7; background: #f7f3ff; }
+.dashboard-mode .journey-grid div:nth-child(4) { border-left-color: #d79a34; background: #fff9ed; }
+
+.dashboard-mode .message-list {
+  border-color: #d8e4f1;
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(45, 166, 183, 0.07), transparent 35%),
+    #eef3fa;
+}
+
+.dashboard-mode .message-list .message {
+  border-radius: 4px 13px 13px;
+  box-shadow: 0 4px 10px rgba(31, 61, 101, 0.07);
+}
+
+.dashboard-mode .message-list .message:is(.ai, .sales, .broadcast) {
+  border-color: #b5deda;
+  border-radius: 13px 4px 13px 13px;
+  background: linear-gradient(135deg, #ddf6f1, #e5f4fb);
+}
+
+/* Futuristic light WhatsApp surface. Saved dark mode remains authoritative. */
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-inbox-header,
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-thread-header,
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-drawer > header {
+  border-color: #2f4b73;
+  background:
+    radial-gradient(circle at 85% -40%, rgba(84, 227, 215, 0.25), transparent 38%),
+    linear-gradient(125deg, #142540, #1b3b61);
+  color: #f4f9ff;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]))
+  :is(.wa-inbox-header h2, .wa-thread-header .wa-contact strong, .wa-drawer > header h3) {
+  color: #f8fbff;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]))
+  :is(.wa-inbox-header #waConnection, .wa-thread-header .wa-contact span) {
+  color: #9ee8e2;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]))
+  :is(.wa-inbox-header, .wa-thread-header, .wa-drawer > header) .wa-icon-btn {
+  color: #dbe9f8;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]))
+  :is(.wa-inbox-header, .wa-thread-header, .wa-drawer > header) .wa-icon-btn:hover {
+  background: rgba(107, 229, 218, 0.14) !important;
+  color: #7cf0e4;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-inbox {
+  background: #fff;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-search {
+  margin-top: 12px;
+  border-color: #d3e0f0;
+  background: linear-gradient(135deg, #edf4fd, #f2f8fc);
+  box-shadow: inset 0 1px 2px rgba(33, 65, 104, 0.04);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-filters button {
+  border: 1px solid #dce6f2;
+  background: #f2f6fc;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-filters button[aria-pressed="true"] {
+  border-color: #76d4cd;
+  background: linear-gradient(135deg, #dff8f2, #e5f5fc);
+  color: #087277;
+  box-shadow: 0 3px 9px rgba(16, 133, 138, 0.09);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-chat-row.active {
+  background: linear-gradient(90deg, #dff7f3, #edf5ff);
+  box-shadow: inset 4px 0 #15a4ac;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-chat-row:hover {
+  background: #f0f6fd;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-avatar {
+  border: 2px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 0 0 0 2px rgba(63, 145, 166, 0.18);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]):is([data-wallpaper="default"], :not([data-wallpaper]))) .wa-messages {
+  background-color: #eaf1fa;
+  background-image:
+    radial-gradient(circle at 10% 15%, rgba(47, 173, 179, 0.08), transparent 23%),
+    radial-gradient(circle at 88% 70%, rgba(101, 113, 224, 0.07), transparent 25%),
+    linear-gradient(rgba(88, 117, 158, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(88, 117, 158, 0.035) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px, 28px 28px;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-bubble {
+  border: 1px solid rgba(200, 213, 229, 0.72);
+  border-radius: 4px 14px 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 5px 14px rgba(29, 58, 95, 0.09);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .outgoing .wa-bubble {
+  border-color: #a9ddd7;
+  border-radius: 14px 4px 14px 14px;
+  background: linear-gradient(135deg, #d5f7ef, #ddf2fa);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .outgoing .wa-bubble::before {
+  background: #dcf3f8;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-composer {
+  border-top: 1px solid #d5e1ef;
+  background: linear-gradient(110deg, #e9f1fb, #f1f7fd);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-compose-status {
+  background: #e9f1fb;
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-send {
+  background: linear-gradient(135deg, #0fa6aa, #08717f);
+  box-shadow: 0 5px 15px rgba(8, 127, 140, 0.28);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-send:hover {
+  background: linear-gradient(135deg, #17b9b6, #087885);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-welcome {
+  border: 1px solid #cddced;
+  border-radius: 22px;
+  background:
+    radial-gradient(circle at 80% 5%, rgba(64, 213, 204, 0.15), transparent 32%),
+    linear-gradient(145deg, #fff, #edf4ff);
+  box-shadow: 0 18px 50px rgba(27, 57, 96, 0.12);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-welcome-mark {
+  background: linear-gradient(135deg, #d7f8f1, #dfeaff);
+  color: #087f8c;
+  box-shadow: 0 8px 22px rgba(8, 127, 140, 0.15);
+}
+
+@keyframes command-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-mode .performance-stat,
+  .dashboard-mode .metric {
+    animation: none;
+    transition: none;
+  }
+}
+
+@media (max-width: 820px) {
+  .dashboard-mode .topbar { min-height: 72px; }
+  .dashboard-mode .performance-stat { min-height: 68px; }
+  .dashboard-mode .performance-stat strong { font-size: 24px; }
+  .dashboard-mode .metric { min-height: 51px; }
+}
+
+/* Visibility layer: utility styles load later, so these selectors deliberately
+   carry enough specificity to keep every light-mode header label readable. */
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) :is(.wa-inbox-header, .wa-thread-header, .wa-drawer > header) {
+  border-color: #cbd9eb;
+  border-bottom-color: #6ecfc9;
+  background-color: #edf4ff !important;
+  background-image:
+    radial-gradient(circle at 86% -30%, rgba(56, 201, 193, 0.18), transparent 42%),
+    linear-gradient(125deg, #f8fbff, #e8f2ff);
+  color: #142b4a !important;
+  box-shadow: inset 0 -1px rgba(82, 138, 177, 0.12);
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) :is(.wa-inbox-header h2, .wa-thread-header .wa-contact strong, .wa-drawer > header h3) {
+  color: #142b4a !important;
+  text-shadow: none;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) .wa-inbox-header #waConnection,
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) .wa-thread-header .wa-contact span {
+  color: #47627d !important;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) .wa-inbox-header #waConnection {
+  color: #47627d !important;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) .wa-inbox-header #waConnection[data-state="live"] {
+  color: #087873 !important;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) .wa-inbox-header #waConnection[data-state="connecting"] {
+  color: #855b0b !important;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) .wa-inbox-header #waConnection[data-state="offline"] {
+  color: #9d3f4e !important;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) :is(.wa-inbox-header, .wa-thread-header, .wa-drawer > header) .wa-icon-btn {
+  color: #3e5b79 !important;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) :is(.wa-inbox-header, .wa-thread-header, .wa-drawer > header) .wa-icon-btn:hover {
+  background: rgba(47, 151, 160, 0.12) !important;
+  color: #087f8c;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) :is(.wa-search input, .wa-composer textarea) {
+  color: #1d3555;
+  caret-color: #087f8c;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) :is(.wa-search input, .wa-composer textarea)::placeholder {
+  color: #61758d;
+  opacity: 1;
+}
+
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) .wa-compose-status span {
+  color: #536980;
+}
+
+/* Keep the selected lead visible beside the lead list on compact laptops.
+   Only narrow phone layouts fall back to a vertical stack. */
+@media (min-width: 760px) and (max-width: 1180px) {
+  .dashboard-mode .work-area {
+    grid-template-columns: minmax(360px, 1fr) minmax(270px, 34vw);
+    align-items: start;
+  }
+
+  .dashboard-mode .detail-panel {
+    grid-column: auto;
+    position: sticky;
+    top: 12px;
+    max-height: calc(100vh - 24px);
+    overflow: auto;
+  }
+
+  .dashboard-mode .lead-panel .filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-mode .lead-panel .filters > :first-child {
+    grid-column: 1 / -1;
+  }
+
+  .dashboard-mode .lead-header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .dashboard-mode .lead-header-actions {
+    width: 100%;
+  }
+
+  .dashboard-mode .lead-month-control {
+    flex: 1;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Aurora CRM theme — green, turquoise, white, and light blue.         */
+/* ------------------------------------------------------------------ */
+body.dashboard-mode {
+  --bg: #f1fafe;
+  --surface: #ffffff;
+  --surface-2: #eaf7fb;
+  --text: #12354a;
+  --muted: #557487;
+  --line: #cfe5eb;
+  --brand: #078b88;
+  --brand-2: #086b78;
+  --shadow: 0 12px 32px rgba(20, 97, 112, 0.1);
+  background-color: #f1fafe;
+  background-image:
+    radial-gradient(circle at 12% 2%, rgba(66, 215, 181, 0.17), transparent 27%),
+    radial-gradient(circle at 91% 12%, rgba(80, 177, 232, 0.2), transparent 30%),
+    linear-gradient(rgba(26, 154, 166, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(26, 154, 166, 0.04) 1px, transparent 1px);
+  background-size: auto, auto, 32px 32px, 32px 32px;
+}
+
+.dashboard-mode .topbar {
+  border-bottom-color: #2ac9bf;
+  background:
+    radial-gradient(circle at 78% -45%, rgba(125, 241, 216, 0.42), transparent 38%),
+    linear-gradient(118deg, #053f49 0%, #07636d 52%, #08756f 100%);
+  box-shadow: 0 12px 32px rgba(5, 77, 88, 0.22);
+}
+
+.dashboard-mode .topbar::after {
+  background: linear-gradient(90deg, #45e0c2, #77d8f4 52%, #58d998);
+}
+
+.dashboard-mode .topbar .eyebrow { color: #9cf8df; }
+.dashboard-mode .topbar .status-pill {
+  border-color: rgba(191, 250, 237, 0.42);
+  background: rgba(4, 68, 75, 0.5);
+  color: #d9fff5;
+}
+.dashboard-mode .topbar .status-pill.ok {
+  border-color: rgba(153, 247, 217, 0.58);
+  background: rgba(12, 116, 91, 0.58);
+  color: #e1fff4;
+}
+.dashboard-mode .topbar :is(.notify-bell, .wa-account-button) {
+  border-color: rgba(191, 241, 239, 0.36);
+  background: rgba(255, 255, 255, 0.13);
+  color: #f4fffd;
+}
+.dashboard-mode .topbar :is(.notify-bell, .wa-account-button):hover {
+  border-color: rgba(190, 255, 239, 0.75);
+  background: rgba(188, 250, 237, 0.22);
+}
+.dashboard-mode .top-hide-button {
+  border-color: rgba(180, 242, 234, 0.45);
+  background: rgba(5, 72, 79, 0.76);
+  color: #baf9ec;
+}
+
+#workspaceRail.wa-rail {
+  border-right-color: #177c80;
+  background: linear-gradient(180deg, #053f49 0%, #075e68 48%, #087c70 100%);
+  color: #dffcf6;
+  box-shadow: 8px 0 24px rgba(7, 79, 89, 0.16);
+}
+#workspaceRail .wa-rail-button { color: #c9ebe9; }
+#workspaceRail .wa-rail-button:hover {
+  background: rgba(181, 247, 234, 0.16);
+  color: #fff;
+}
+#workspaceRail .wa-rail-button.selected {
+  background: linear-gradient(145deg, #72e8d0, #72cef0);
+  color: #064a52;
+  box-shadow: 0 8px 20px rgba(70, 216, 193, 0.32);
+}
+#workspaceRail .wa-rail-brand {
+  border-color: rgba(174, 242, 231, 0.42);
+  background: rgba(202, 255, 244, 0.13);
+  color: #eafffa;
+}
+
+.dashboard-mode .performance-stat,
+.dashboard-mode .performance-stat:not(.active),
+.dashboard-mode .stat-total:not(.active),
+.dashboard-mode .stat-won:not(.active),
+.dashboard-mode .stat-lost:not(.active),
+.dashboard-mode .stat-rate:not(.active) {
+  border-color: rgba(130, 226, 216, 0.34);
+  background: linear-gradient(135deg, #075867, #087078);
+  box-shadow: 0 9px 24px rgba(7, 105, 113, 0.18);
+}
+.dashboard-mode .stat-won,
+.dashboard-mode .stat-won:not(.active) {
+  background: linear-gradient(135deg, #075e4c, #0b765f);
+}
+.dashboard-mode .stat-lost,
+.dashboard-mode .stat-lost:not(.active) {
+  background: linear-gradient(135deg, #125d73, #176d86);
+}
+.dashboard-mode .stat-rate,
+.dashboard-mode .stat-rate:not(.active) {
+  background: linear-gradient(135deg, #075e5a, #08736f);
+}
+.dashboard-mode .performance-stat:hover,
+.dashboard-mode .stat-rate:hover {
+  border-color: #9cf2e2;
+  background: linear-gradient(135deg, #075861, #08756f);
+  box-shadow: 0 13px 28px rgba(6, 103, 111, 0.24);
+}
+.dashboard-mode .performance-stat.active {
+  border-color: #8cf0dc;
+  background: linear-gradient(135deg, #064a53, #08736f);
+  box-shadow: inset 3px 0 #a5fae9, 0 12px 28px rgba(7, 109, 112, 0.22);
+}
+.dashboard-mode .performance-stat span,
+.dashboard-mode .performance-stat small { color: #d2f5f2; }
+.dashboard-mode .performance-stat strong,
+.dashboard-mode :is(.stat-total, .stat-won, .stat-lost, .stat-rate) strong { color: #fff; }
+.dashboard-mode .stat-total { --command-glow: rgba(93, 213, 235, 0.15); }
+.dashboard-mode .stat-won { --command-glow: rgba(80, 229, 171, 0.16); }
+.dashboard-mode .stat-lost { --command-glow: rgba(113, 205, 241, 0.14); }
+.dashboard-mode .stat-rate { --command-glow: rgba(81, 225, 200, 0.15); }
+.dashboard-mode .performance-stat i,
+.dashboard-mode .stat-lost i,
+.dashboard-mode .stat-rate i {
+  background: #a3edff;
+  box-shadow: 0 0 11px #a3edff;
+}
+.dashboard-mode .stat-won i {
+  background: #8ff2c5;
+  box-shadow: 0 0 11px #8ff2c5;
+}
+
+.dashboard-mode .metric {
+  --metric-accent: #279cbe;
+  --metric-text: #12647e;
+  --metric-soft: #eefaff;
+  border-color: #d1e9ee;
+  background: linear-gradient(145deg, #fff, var(--metric-soft));
+  box-shadow: 0 6px 17px rgba(27, 104, 123, 0.08);
+}
+.dashboard-mode .metric:nth-child(2) { --metric-accent: #20aa9c; --metric-text: #08776f; --metric-soft: #edfcf9; }
+.dashboard-mode .metric:nth-child(3) { --metric-accent: #30ad78; --metric-text: #177250; --metric-soft: #effbf5; }
+.dashboard-mode .metric:nth-child(4) { --metric-accent: #20b9c0; --metric-text: #08757d; --metric-soft: #edfbfc; }
+.dashboard-mode .metric:nth-child(5) { --metric-accent: #42a5cf; --metric-text: #246b8b; --metric-soft: #eff9fd; }
+.dashboard-mode .metric:nth-child(6) { --metric-accent: #4fbf91; --metric-text: #247452; --metric-soft: #f0fbf6; }
+.dashboard-mode .metric:nth-child(7) { --metric-accent: #36a8b6; --metric-text: #146d79; --metric-soft: #effbfc; }
+.dashboard-mode .metric span { color: #506f82; }
+.dashboard-mode .metric:hover {
+  border-color: #73d9d0;
+  box-shadow: 0 10px 22px rgba(17, 132, 139, 0.14);
+}
+
+.dashboard-mode .work-area :is(.lead-panel, .detail-panel) {
+  border-color: #c7e3e8;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 14px 38px rgba(19, 99, 117, 0.1);
+}
+.dashboard-mode .lead-panel > .panel-header {
+  border-bottom-color: #cde8e8;
+  background:
+    radial-gradient(circle at 82% 0, rgba(68, 215, 183, 0.18), transparent 34%),
+    linear-gradient(125deg, #fff, #edfaff);
+}
+.dashboard-mode .lead-header h2 { color: #0c5363; }
+.dashboard-mode .lead-header h2::after {
+  background: linear-gradient(90deg, #20b8ae, #4ac987);
+}
+.dashboard-mode .filters {
+  border-bottom-color: #d1e8ec;
+  background: linear-gradient(120deg, rgba(232, 248, 252, 0.94), rgba(238, 252, 247, 0.94));
+}
+.dashboard-mode .filters :is(input, select),
+.dashboard-mode .lead-month-control select,
+.dashboard-mode .work-area :is(input, select, textarea) {
+  border-color: #cce3e7;
+  background: rgba(255, 255, 255, 0.96);
+  color: #173e52;
+}
+.dashboard-mode .work-area :is(input, select, textarea):focus {
+  border-color: #20aba6;
+  box-shadow: 0 0 0 3px rgba(32, 171, 166, 0.13);
+}
+.dashboard-mode .lead-panel th {
+  background: linear-gradient(90deg, #e6f7fb, #e9f9f4);
+  color: #3e697a;
+}
+.dashboard-mode .lead-panel td { border-bottom-color: #e1eef0; }
+.dashboard-mode .lead-panel tbody tr:nth-child(even) { background: #f8fcfd; }
+.dashboard-mode .lead-panel tbody tr:hover,
+.dashboard-mode .lead-panel tbody tr:focus-within {
+  background: linear-gradient(90deg, #e5faf4, #eef9ff);
+  box-shadow: inset 4px 0 #20b5aa;
+}
+.dashboard-mode .customer-phone { color: #123b52; }
+.dashboard-mode .customer-name,
+.dashboard-mode .customer-sub { color: #557487; }
+.dashboard-mode .work-area .primary-action {
+  background: linear-gradient(135deg, #087f76, #086b78);
+  box-shadow: 0 7px 17px rgba(8, 139, 136, 0.22);
+}
+.dashboard-mode .work-area .primary-action:hover {
+  background: linear-gradient(135deg, #087b70, #08727d);
+  box-shadow: 0 9px 21px rgba(8, 139, 136, 0.3);
+}
+.dashboard-mode .work-area .ghost-button {
+  border-color: #bfe0e3;
+  background: #f7fdff;
+  color: #086674;
+}
+.dashboard-mode .work-area .ghost-button:hover {
+  border-color: #72d5cd;
+  background: #e7faf5;
+}
+.dashboard-mode .detail-panel > .panel-header {
+  border-bottom-color: #6ce0cc;
+  background:
+    radial-gradient(circle at 82% -45%, rgba(149, 250, 225, 0.38), transparent 42%),
+    linear-gradient(125deg, #075564, #08736f);
+}
+.dashboard-mode .detail-body { background: linear-gradient(180deg, #fbfeff, #f5fcfb); }
+.dashboard-mode .customer-journey {
+  border-color: #bfe3e4;
+  background: linear-gradient(135deg, #eafaff, #effcf6);
+}
+.dashboard-mode .journey-grid div:nth-child(1) { border-left-color: #42a9d1; background: #f2faff; }
+.dashboard-mode .journey-grid div:nth-child(2) { border-left-color: #20ab9e; background: #effcf9; }
+.dashboard-mode .journey-grid div:nth-child(3) { border-left-color: #37b57c; background: #f1fbf6; }
+.dashboard-mode .journey-grid div:nth-child(4) { border-left-color: #2d9fac; background: #effbfc; }
+.dashboard-mode .message-list {
+  border-color: #cfe7e9;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(50, 190, 175, 0.09), transparent 35%),
+    #edf8fb;
+}
+.dashboard-mode .message-list .message:is(.ai, .sales, .broadcast) {
+  border-color: #addfd8;
+  background: linear-gradient(135deg, #dff8ef, #e6f7fc);
+}
+
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) {
+  color: #173e52;
+  background: #f4fbfd;
+}
+.whatsapp-mode .whatsapp-workspace:not([data-theme="dark"]) :is(.wa-inbox-header, .wa-thread-header, .wa-drawer > header) {
+  border-color: #c6e2e6;
+  border-bottom-color: #65d8cb;
+  background-color: #edf4ff !important;
+  background-image:
+    radial-gradient(circle at 86% -30%, rgba(73, 218, 184, 0.22), transparent 42%),
+    linear-gradient(125deg, #ffffff, #e8f7fb);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-inbox { background: #fff; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-search {
+  border-color: #cce5e8;
+  background: linear-gradient(135deg, #edf9fc, #eefbf6);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-filters button {
+  border-color: #d0e7ea;
+  background: #f2f9fb;
+  color: #527184;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-filters button[aria-pressed="true"] {
+  border-color: #64d4c5;
+  background: linear-gradient(135deg, #d9f8ee, #dff5fc);
+  color: #087068;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-chat-row.active {
+  background: linear-gradient(90deg, #dff8f0, #e5f6fc);
+  box-shadow: inset 4px 0 #1db4a5;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-chat-row:hover {
+  background: #effaf9;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"]):is([data-wallpaper="default"], :not([data-wallpaper]))) .wa-messages {
+  background-color: #eaf6fb;
+  background-image:
+    radial-gradient(circle at 10% 15%, rgba(43, 190, 170, 0.1), transparent 23%),
+    radial-gradient(circle at 88% 70%, rgba(75, 174, 224, 0.1), transparent 25%),
+    linear-gradient(rgba(34, 139, 149, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(34, 139, 149, 0.035) 1px, transparent 1px);
+  background-size: auto, auto, 28px 28px, 28px 28px;
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-bubble {
+  border-color: #cde2e8;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 5px 15px rgba(30, 101, 116, 0.09);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .outgoing .wa-bubble {
+  border-color: #9cddce;
+  background: linear-gradient(135deg, #d8f8e9, #def3fb);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .outgoing .wa-bubble::before { background: #dcf5ef; }
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-composer,
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-compose-status {
+  border-color: #cfe4e8;
+  background: linear-gradient(110deg, #eaf8fb, #f1fcf8);
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-send {
+  background: linear-gradient(135deg, #16ad88, #087f8c);
+  box-shadow: 0 6px 17px rgba(8, 139, 136, 0.28);
+}
+
+/* Lead workspace: collapsible controls, compact columns, and side composer. */
+.dashboard-mode .lead-title-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.dashboard-mode .lead-controls-toggle {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #a9deda;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #f6fffd, #e1f7f5);
+  color: #08756f;
+  box-shadow: 0 4px 12px rgba(8, 139, 136, 0.12);
+  cursor: pointer;
+  font: inherit;
+  font-size: 17px;
+  font-weight: 900;
+  line-height: 1;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.dashboard-mode .lead-controls-toggle:hover,
+.dashboard-mode .lead-controls-toggle:focus-visible {
+  border-color: #38bbb1;
+  box-shadow: 0 0 0 3px rgba(31, 183, 173, 0.13), 0 7px 16px rgba(8, 139, 136, 0.16);
+  transform: translateY(-1px);
+  outline: none;
+}
+
+.dashboard-mode .lead-panel.controls-collapsed .lead-header {
+  min-height: 49px;
+  padding-block: 8px;
+}
+
+.dashboard-mode .lead-panel.controls-collapsed .lead-header p,
+.dashboard-mode .lead-panel.controls-collapsed .lead-header-actions,
+.dashboard-mode .lead-panel.controls-collapsed .filters {
+  display: none;
+}
+
+.dashboard-mode .lead-panel.controls-collapsed .table-wrap {
+  max-height: calc(100vh - 215px);
+}
+
+.dashboard-mode .lead-focus-mode .lead-panel.controls-collapsed .table-wrap {
+  max-height: calc(100vh - 82px);
+}
+
+.dashboard-mode .lead-panel th:first-child { width: 64%; }
+.dashboard-mode .lead-panel th:nth-child(2) { width: 19%; }
+.dashboard-mode .lead-panel th:nth-child(3) { width: 17%; }
+
+.dashboard-mode .lead-signal-cell {
+  white-space: nowrap;
+}
+
+.dashboard-mode .lead-signal-cell .chip {
+  vertical-align: middle;
+}
+
+.dashboard-mode .lead-score {
+  display: inline-grid;
+  min-width: 32px;
+  min-height: 27px;
+  margin-left: 6px;
+  place-items: center;
+  padding: 3px 7px;
+  border: 1px solid #b7dfe5;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #eefaff, #edfcf7);
+  color: #0b6170;
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.dashboard-mode .detail-chat-composer {
+  position: relative;
+  margin-top: 15px;
+  padding: 13px;
+  overflow: hidden;
+  border: 1px solid #bfe2e4;
+  border-radius: 15px;
+  background:
+    radial-gradient(circle at 92% 0, rgba(87, 207, 183, 0.18), transparent 38%),
+    linear-gradient(145deg, #f8feff, #edf9f7);
+  box-shadow: 0 10px 24px rgba(18, 108, 118, 0.1);
+}
+
+.dashboard-mode .detail-chat-composer::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: linear-gradient(#22b8b0, #48c98c, #4caee0);
+  content: "";
+}
+
+.dashboard-mode .detail-chat-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.dashboard-mode .detail-chat-heading h3 {
+  margin: 0;
+  color: #0b5664;
+  font-size: 15px;
+}
+
+.dashboard-mode .detail-chat-heading small,
+.dashboard-mode .detail-upload-hint {
+  display: block;
+  margin-top: 3px;
+  color: #5a7887;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.dashboard-mode .detail-chat-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border: 1px solid #b8e5d5;
+  border-radius: 999px;
+  background: #eafbf4;
+  color: #087568;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.dashboard-mode .detail-chat-live i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #2ab77d;
+  box-shadow: 0 0 0 3px rgba(42, 183, 125, 0.12);
+}
+
+.dashboard-mode .detail-reply-label {
+  display: block;
+  margin-bottom: 5px;
+  color: #476b79;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.dashboard-mode #replyText {
+  width: 100%;
+  min-height: 92px;
+  max-height: 180px;
+  resize: vertical;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  line-height: 1.45;
+}
+
+.dashboard-mode .detail-attachment-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 9px;
+  padding: 9px;
+  border: 1px solid #bee2e3;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.dashboard-mode .detail-attachment-preview[hidden],
+.dashboard-mode .detail-remove-file[hidden] {
+  display: none !important;
+}
+
+.dashboard-mode .detail-attachment-preview :is(img, video) {
+  width: 76px;
+  height: 62px;
+  flex: 0 0 76px;
+  border-radius: 9px;
+  background: #e4f2f4;
+  object-fit: cover;
+}
+
+.dashboard-mode .detail-file-icon {
+  display: inline-grid;
+  width: 54px;
+  height: 54px;
+  flex: 0 0 54px;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #dff7f2, #e2f3fc);
+  color: #08717f;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.dashboard-mode .detail-file-meta {
+  min-width: 0;
+}
+
+.dashboard-mode .detail-file-meta :is(strong, span) {
+  display: block;
+}
+
+.dashboard-mode .detail-file-meta strong {
+  overflow: hidden;
+  color: #143f52;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-mode .detail-file-meta span {
+  margin-top: 4px;
+  color: #66808d;
+  font-size: 10px;
+}
+
+.dashboard-mode .detail-chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: 10px;
+}
+
+.dashboard-mode .detail-chat-actions .ghost-button,
+.dashboard-mode .detail-chat-actions .primary-action {
+  min-height: 36px;
+}
+
+.dashboard-mode .detail-attach-button span {
+  margin-right: 3px;
+  font-size: 17px;
+  line-height: 0;
+}
+
+.dashboard-mode .detail-send-button {
+  min-width: 82px;
+  margin-left: auto;
+}
+
+.dashboard-mode .detail-chat-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.dashboard-mode .detail-message-attachment {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  color: #174b5b;
+  font-weight: 800;
+}
+
+.dashboard-mode .detail-message-attachment i {
+  display: inline-grid;
+  min-width: 31px;
+  min-height: 25px;
+  place-items: center;
+  border-radius: 7px;
+  background: #d8f4ee;
+  color: #087369;
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: 0.04em;
+}
+
+.dashboard-mode .detail-message-text {
+  display: block;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .dashboard-mode .lead-panel th:first-child { width: 56%; }
+  .dashboard-mode .lead-panel th:nth-child(2) { width: 23%; }
+  .dashboard-mode .lead-panel th:nth-child(3) { width: 21%; }
+  .dashboard-mode .lead-panel th,
+  .dashboard-mode .lead-panel td { padding-inline: 9px; }
+  .dashboard-mode .lead-score { display: flex; width: max-content; margin: 5px 0 0; }
+}
+.whatsapp-mode :where(.whatsapp-workspace:not([data-theme="dark"])) .wa-unread {
+  background: #51d6a5;
+  color: #063e35;
+}
+
+/* Compact inbox controls: keep more conversations visible on small screens. */
+.whatsapp-mode .wa-inbox-controls {
+  flex: 0 0 auto;
+  min-height: 0;
+}
+
+.whatsapp-mode .wa-inbox-controls-toggle svg {
+  transform: rotate(180deg);
+  transition: transform 0.18s ease;
+}
+
+.whatsapp-mode .wa-inbox.controls-collapsed .wa-inbox-controls {
+  display: none;
+}
+
+.whatsapp-mode .wa-inbox.controls-collapsed .wa-inbox-controls-toggle svg {
+  transform: rotate(0deg);
+}
+
+.whatsapp-mode .wa-inbox.controls-collapsed .wa-inbox-header {
+  min-height: 66px;
+  padding-block: 10px;
+}
+
+.whatsapp-mode .wa-inbox.controls-collapsed .wa-inbox-header h2 {
+  margin-bottom: 2px;
+  font-size: 21px;
+}
+
+.whatsapp-mode .wa-inbox.controls-collapsed .wa-inbox-header :is(#waConnection) {
+  font-size: 11px;
+}
+
+.whatsapp-mode .wa-inbox-controls-toggle {
+  border: 1px solid rgba(72, 173, 169, 0.2) !important;
+  border-radius: 10px;
+  background: rgba(224, 248, 245, 0.72) !important;
+  color: #08766f !important;
+}
+
+.whatsapp-mode .whatsapp-workspace[data-theme="dark"] .wa-inbox-controls-toggle {
+  border-color: rgba(111, 220, 209, 0.2) !important;
+  background: rgba(37, 211, 102, 0.1) !important;
+  color: #78e5d5 !important;
+}
