@@ -27,3 +27,11 @@ test('server pause or unavailable status blocks starting while previews remain u
   assert.equal((await sendingAvailability(async()=>{throw Error('offline');})).allowed,false);
   assert.equal((await sendingAvailability(async()=>({data:{enabled:true,dispatchConfigured:true,settings:{enabled:true}}}))).allowed,true);
 });
+
+test('pause messages distinguish deployment configuration from organization activation', async () => {
+  const deployment = await sendingAvailability(async () => ({data:{enabled:true,dispatchConfigured:false,settings:{enabled:false}}}));
+  assert.match(deployment.message, /NODE_ENV=production/);
+  const organization = await sendingAvailability(async () => ({data:{enabled:true,dispatchConfigured:true,settings:{enabled:false}}}));
+  assert.match(organization.message, /Sending settings/);
+  assert.doesNotMatch(organization.message, /NODE_ENV/);
+});

@@ -2,9 +2,9 @@ export async function sendingAvailability(api) {
   try {
     const { data } = await api('/marketing-workspace/capabilities');
     if (!data?.enabled) return { allowed: true, message: '' };
-    return data.dispatchConfigured && data.settings?.enabled
-      ? { allowed: true, message: '' }
-      : { allowed: false, message: 'Sending is paused on the server. You can preview and approve batches.' };
+    if (!data.dispatchConfigured) return { allowed: false, message: 'Server sending is disabled. Check CRM_MARKETING_DISPATCH_ENABLED=true and NODE_ENV=production, then deploy.' };
+    if (!data.settings?.enabled) return { allowed: false, message: 'Organization sending is paused. An administrator can open Sending settings to enable it.' };
+    return { allowed: true, message: '' };
   } catch (error) {
     if (error.status === 404) return { allowed: true, message: '' };
     return { allowed: false, message: 'Sending status could not load. Refresh before starting a batch.' };

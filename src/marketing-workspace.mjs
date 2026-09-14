@@ -49,6 +49,40 @@ function formDialog(title, html, submit, label = 'Save') {
 
 const baseFormDialog = formDialog;
 
+export async function openSendingSettings({ api, onChanged }) {
+  const request = async (path, body, method = 'PATCH') => (await api(`/marketing-workspace${path}`, body ? { method, body } : {})).data;
+  const capabilities = await request('/capabilities');
+  if (!capabilities.enabled) throw new Error('Marketing settings are unavailable on this server.');
+  let settings = capabilities.settings || {};
+  const configured = capabilities.dispatchConfigured === true;
+  const { dialog, close } = modal('Sending settings', `
+    <p>${configured ? 'Server sending is configured.' : 'Set CRM_MARKETING_DISPATCH_ENABLED=true and NODE_ENV=production on the backend, then deploy.'}</p>
+    <p>Organization sending: <strong>${settings.enabled ? 'Enabled' : 'Paused'}</strong> · Stage: ${esc(pretty(settings.rolloutStage) || 'Not configured')}</p>
+    <p>Enabling sending can release queued marketing messages. Approved batches can then be started from Marketing.</p>
+    <div class="form-actions"><button type="button" class="button button-primary" data-toggle ${!settings.enabled && !configured ? 'disabled' : ''}>${settings.enabled ? 'Pause sending' : 'Enable sending'}</button>
+    <button type="button" class="button button-secondary" data-rollout>Rollout settings</button></div>`);
+  dialog.querySelector('[data-toggle]').onclick = () => {
+    formDialog(settings.enabled ? 'Pause sending' : 'Enable sending', field('Reason', 'reason'), async values => {
+      await request('/settings', { enabled: !settings.enabled, reason: values.reason });
+      close(); await onChanged();
+    }, settings.enabled ? 'Pause sending' : 'Enable sending');
+  };
+  dialog.querySelector('[data-rollout]').onclick = () => {
+    formDialog('Rollout settings', `<p>Saving a stage pauses sending. Start with 1–10 internal contacts, then review a pilot before full rollout.</p>
+      ${select('Stage', 'stage', [['INTERNAL_TEST', 'Internal test'], ['PILOT', 'Small approved pilot'], ['FULL', 'Full rollout after pilot review']])}
+      <label class="field">Contact IDs (comma separated)<textarea name="contactIds"></textarea></label>
+      ${field('Provider/account verification reference', 'providerReviewReference')}
+      <label class="field">Previous test / pilot review reference<input name="previousStageReviewReference" /></label>
+      ${field('Reason', 'reason')}`, async values => {
+      settings = await request('/rollout', { stage: values.stage, expectedVersion: settings.version || 0,
+        contactIds: values.contactIds.split(',').map(s => s.trim()).filter(Boolean),
+        providerReviewReference: values.providerReviewReference,
+        ...(values.previousStageReviewReference ? { previousStageReviewReference: values.previousStageReviewReference } : {}), reason: values.reason }, 'PUT');
+      close(); await onChanged(); await openSendingSettings({ api, onChanged });
+    });
+  };
+}
+
 export function audienceRule(fieldName, value) {
   if (['lastInteraction', 'lastMarketing'].includes(fieldName)) return { field: fieldName, op: value === 'unknown' ? 'unknown' : 'olderDays', ...(value === 'unknown' ? {} : { value: Number(value) }) };
   return { field: fieldName, op: fieldName === 'service' ? 'contains' : 'eq', value: fieldName === 'needsReview' ? value === 'true' : value };

@@ -2,7 +2,7 @@ import { patchMarkup, patchNode, bindLiveEvent } from "./dom-patch.mjs";
 import { createChatCache } from "./chat-cache.js";
 import { uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners } from "./inbox-style.js";
 import { mountClientDirectory, openClassificationReview } from "./client-directory.mjs";
-import { mountContactWorkspace } from './marketing-workspace.mjs';
+import { mountContactWorkspace, openSendingSettings } from './marketing-workspace.mjs';
 import { sendingAvailability, previewActions, approvePreview } from './simple-marketing-flow.mjs';
 
 const config = window.__CRM_CONFIG__ || {};
@@ -2263,6 +2263,7 @@ async function renderMarketing() {
       ${miniStat("Opted out", counts ? formatCount(counts.optedOut) : "—")}
     </div>
     <p class="muted simple-count-note">Choose a batch, check the message, approve it, then press Start. Opted-out contacts are excluded.</p>
+    ${['OWNER', 'ADMIN'].includes(state.session?.role) ? '<button class="button button-secondary" id="sending-settings">Sending settings</button>' : ''}
     ${sending.message ? `<p class="form-error" role="status">${esc(sending.message)}</p>` : ''}
     ${summary.error ? '<div class="form-error">Contact counts could not load. Deploy the updated backend, then refresh.</div>' : ""}
     <section class="panel"><div class="panel-title-row"><div><h3>Your batches</h3><p>Open a batch to check the message and video.</p></div><span class="count-pill">${active.length} batches</span></div>
@@ -2273,6 +2274,7 @@ async function renderMarketing() {
     ${history.length ? `<details class="panel simple-history"><summary>Past & cancelled batches · ${history.length}</summary><div class="campaign-list">${history.map(simpleCampaignCard).join("")}</div></details>` : ""}
   </div>`;
   document.querySelector("#refresh-marketing").addEventListener("click", renderMarketing);
+  document.querySelector('#sending-settings')?.addEventListener('click', () => openSendingSettings({ api, onChanged: renderMarketing }).catch(error => notify(error.message, true)));
   document.querySelectorAll("[data-preview-batch]").forEach(button => button.addEventListener("click", () => showSimpleCampaignPreview(button.dataset.previewBatch, button)));
   startMarketingProgress();
 }
