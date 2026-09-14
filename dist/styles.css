@@ -506,3 +506,63 @@ img.wa-media, video.wa-media { object-fit: cover; }
   .campaign-main { flex-direction: column; }.campaign-actions { justify-content: flex-start; }.campaign-detail-meta { grid-template-columns: 1fr; }
   .step-fields { grid-template-columns: 1fr; }.step-fields .step-toggle { grid-column: auto; }
 }
+/* Simple marketing: counts, batches and a readable message preview. */
+.simple-marketing { max-width: 1080px; margin: 0 auto; }
+.simple-header-actions, .simple-preview-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.simple-marketing-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 16px; }
+.simple-marketing-metrics > * { background: white; border: 1px solid #dce7e6; border-radius: 16px; padding: 24px; }
+.simple-marketing-metrics strong { display: block; color: #123f37; font-size: 32px; margin-bottom: 6px; }
+.simple-count-note { font-size: 12px; margin: 12px 0 28px; }
+.simple-marketing .panel { margin-top: 20px; }
+.simple-marketing .campaign-list { gap: 14px; }
+.simple-batch-card { background: #fff; padding: 20px; border-radius: 14px; }
+.simple-batch-card .campaign-main strong { font-size: 16px; }
+.simple-batch-card .campaign-main small { margin-top: 6px; }
+.simple-batch-stats { display: flex; gap: 26px; margin-top: 18px; padding-top: 14px; border-top: 1px solid #edf1f3; color: #687c80; font-size: 12px; }
+.simple-batch-stats strong { color: #163a35; margin-right: 4px; }
+.simple-history summary { cursor: pointer; font-weight: 600; }
+.simple-history[open] .campaign-list { margin-top: 20px; }
+.simple-preview-modal { width: min(620px, calc(100vw - 32px)); max-height: 90vh; overflow-y: auto; }
+.simple-preview-content .field { margin: 16px 0; }
+.simple-preview-content .tiny-note { font-size: 12px; line-height: 1.5; text-align: left; margin: 12px 0; }
+.simple-message-stage { padding: 24px; background: #eeeae3; border-radius: 14px; margin: 18px 0; }
+.simple-message-bubble { max-width: 420px; margin: 0 auto; padding: 16px; border-radius: 2px 14px 14px 14px; background: #fff; box-shadow: 0 2px 6px #243b3510; }
+.simple-message-bubble > p { white-space: pre-wrap; color: #22342f; font-size: 14px; line-height: 1.65; margin: 10px 0; overflow-wrap: anywhere; }
+.simple-message-bubble > small { color: #718078; font-size: 11px; }
+.simple-preview-media video, .simple-preview-media img, .simple-preview-media audio { width: 100%; max-height: 300px; border-radius: 8px; background: #172e27; }
+.simple-preview-actions { border-top: 1px solid #e6ece9; padding-top: 18px; margin-top: 18px; }
+@media (max-width: 600px) {
+  .simple-marketing .section-head { align-items: flex-start; flex-direction: column; gap: 14px; }
+  .simple-marketing-metrics { gap: 8px; }
+  .simple-marketing-metrics > * { padding: 16px 10px; }
+  .simple-marketing-metrics strong { font-size: 24px; }
+  .simple-marketing .campaign-main { align-items: flex-start; gap: 14px; }
+  .simple-batch-stats { gap: 14px; }
+  .simple-message-stage { padding: 12px; }
+}
+
+/* Per-batch progress, matching the compact sending indicator. */
+.batch-progress-box { margin-top: 16px; padding: 14px; background: #f0f5ff; border: 1px solid #d7e4fa; border-radius: 9px; }
+.batch-progress-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; color: #173b59; }
+.batch-progress-heading b { color: #008d9e; white-space: nowrap; }
+.batch-progress-track { height: 9px; margin: 11px 0 9px; overflow: hidden; border-radius: 99px; background: #c5dce5; box-shadow: inset 0 1px 2px #123f3712; }
+.batch-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#20c67b,#13b9b2); }
+.batch-progress-box small { color: #526d8a; font-size: 12px; line-height: 1.6; }
+.batch-progress-box.is-stopped .batch-progress-track span { background: #83969f; }
+.simple-batch-card .simple-batch-stats { margin-top: 12px; padding-top: 10px; }
+.crm-directory-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.crm-directory-tabs [aria-pressed="true"] { background: #e0f7f5; border-color: #008a8c; color: #075d65; }
+.crm-directory-tabs span { margin-left: 6px; font-weight: 700; }
+.crm-directory-panel td { vertical-align: top; white-space: normal; min-width: 110px; }
+.crm-directory-panel small { color: #536c82; line-height: 1.7; }
+.crm-directory-panel .toolbar { align-items: end; }
+.crm-review-dialog { width: min(640px, calc(100vw - 32px)); max-height: 90vh; overflow: auto; border: 1px solid #d5e3ec; color: #163e5d; }
+.crm-review-dialog::backdrop { background: #17374b70; }
+.crm-review-dialog p { line-height: 1.6; }
+.crm-marketing-banner{display:flex;gap:16px;align-items:center;flex-wrap:wrap;padding:16px;border:1px solid #bedbdc;background:#eefafa;border-radius:12px;margin-bottom:16px}
+.crm-overview-links{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}.crm-overview-links span{display:block;font-size:12px;color:#627a91;margin-top:6px}
+.crm-workspace-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:18px 0;border-bottom:1px solid #e3eaf2}.crm-workspace-row p{margin:5px 0;font-size:13px;color:#527087}.crm-workspace-row>div{min-width:0}.crm-workspace-row strong{overflow-wrap:anywhere}
+dialog.crm-workspace-dialog{position:fixed;inset:0;margin:auto;border:1px solid #d5e1ec;border-radius:16px;width:min(760px,94vw);max-height:90vh;padding:24px;color:#102e4a;background:#fff;overflow:auto}dialog.crm-workspace-dialog::backdrop{background:#12283d80}.crm-workspace-dialog .field{margin-bottom:14px}.crm-workspace-dialog input[type=checkbox]{width:auto}.crm-workspace-dialog .form-actions{flex-wrap:wrap;margin:16px 0}
+.crm-message-preview{white-space:pre-wrap;overflow-wrap:anywhere;background:#e5f5ef;padding:20px;border-radius:12px;font:inherit;line-height:1.65}.crm-preview-media{display:block;max-width:100%;max-height:330px;margin:12px auto;border-radius:10px}.crm-batch-progress{background:#edf5fc;border:1px solid #d6e4f2;border-radius:12px;padding:16px;margin:16px 0}.crm-batch-progress progress{width:100%;height:12px;display:block;margin:12px 0;accent-color:#009b89}.crm-dialog-body{min-width:0}.crm-dialog-body .form-grid{align-items:end}
+@media(max-width:600px){.crm-overview-links{grid-template-columns:1fr}.crm-workspace-row{align-items:flex-start;flex-wrap:wrap}.crm-workspace-dialog{padding:16px!important}.crm-dialog-body .form-grid{grid-template-columns:1fr}}
+.crm-workspace-dialog .form-error:empty{display:none}

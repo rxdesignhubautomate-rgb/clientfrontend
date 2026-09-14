@@ -5,13 +5,15 @@ const MAX_CACHED_MESSAGES_PER_CONVERSATION = 500;
 
 export function createChatCache(userKey) {
   if (!("indexedDB" in window) || !userKey) return createNoopCache();
-  return new IndexedChatCache(`rx-crm-chat-cache-${stableKey(userKey)}`);
+  return new IndexedChatCache(`rx-crm-chat-cache-v3-${encodeURIComponent(userKey)}`);
 }
 
 class IndexedChatCache {
   constructor(databaseName) {
     this.databaseName = databaseName;
     this.databasePromise = null;
+    this.lastConversationTrim = 0;
+    this.lastMessageTrim = 0;
   }
 
   async getConversations() {
@@ -34,7 +36,10 @@ class IndexedChatCache {
       if (id) store.put({ ...conversation, conversationId: id, cachedAt: new Date().toISOString() });
     }
     await transactionDone(transaction);
-    await this.trimConversations(database);
+    if(Date.now()-this.lastConversationTrim>60_000){
+      this.lastConversationTrim=Date.now();
+      await this.trimConversations(database);
+    }
   }
 
   async replaceConversations(conversations) {
@@ -75,7 +80,10 @@ class IndexedChatCache {
     await transactionDone(transaction);
     const conversationIds = [...new Set(messages.map((message) => message.conversationId).filter(Boolean))];
     await Promise.all(conversationIds.map((conversationId) => this.trimMessages(database, conversationId)));
-    await this.trimTotalMessages(database);
+    if(Date.now()-this.lastMessageTrim>60_000){
+      this.lastMessageTrim=Date.now();
+      await this.trimTotalMessages(database);
+    }
   }
 
   async getOverview(contactId) {
@@ -224,6 +232,7 @@ class IndexedChatCache {
 
 function createNoopCache() {
   return {
+    replaceConversations: async () => {},
     getConversations: async () => [],
     putConversations: async () => {},
     getMessages: async () => [],
@@ -250,14 +259,7 @@ function transactionDone(transaction) {
   });
 }
 
-function stableKey(value) {
-  let hash = 2166136261;
-  for (const character of String(value).toLowerCase()) {
-    hash ^= character.charCodeAt(0);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(36);
-}
+
 
 function timestamp(value) {
   if (!value) return 0;

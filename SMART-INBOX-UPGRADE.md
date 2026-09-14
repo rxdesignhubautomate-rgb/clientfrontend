@@ -1,6 +1,6 @@
 # RX existing-client CRM — smart inbox upgrade
 
-Frontend **1.12.0** · Backend **2.13.0**
+Frontend **1.11.0** · Backend **2.12.0**
 
 The smart inbox workflow from the first Sales CRM has been adapted to the existing-client CRM. The existing client IDs, order workflow, Firebase sign-in, approved Utility templates and Marketing campaign engine remain the basis of this release.
 
@@ -8,7 +8,7 @@ The smart inbox workflow from the first Sales CRM has been adapted to the existi
 
 | Area | Updated behavior |
 | --- | --- |
-| Fast inbox | IndexedDB cache, complete initial pagination, paginated incremental sync, server sync cutoff, 24-hour full reconciliation and manual Refresh. Cached templates, quick replies, users, and capabilities also load locally and refresh daily. Updates beyond the first 100 conversations are no longer dropped. |
+| Fast inbox | IndexedDB cache, complete initial pagination, paginated incremental sync, server sync cutoff, 15-minute full reconciliation and manual Refresh. Updates beyond the first 100 conversations are no longer dropped. |
 | Quick filters | All, Unread, Read, Reply open, Favourites, Due, Closing, Hot, Quotation, Follow-up, Archived; actual owner circles and client labels combine with search. |
 | Connect next | Optional priority sorting puts pinned chats first, followed by overdue work, closing windows, unread clients and high-interest clients. Rows show products, stage, draft and reminder hints. |
 | Private chat organization | Pin, archive, mute, mark unread and star messages. Preferences belong to the signed-in user. |

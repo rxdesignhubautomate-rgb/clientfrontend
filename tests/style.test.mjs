@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {bindLiveEvent} from '../src/dom-patch.mjs';
 import fs from 'node:fs';
 import { inboxMatches, inboxCounts, inboxOwners, avatarStyle, uiIcon } from '../src/inbox-style.js';
 
@@ -47,10 +48,9 @@ function createHarness({ mobile = false } = {}) {
   const source = app.slice(app.indexOf('async function login(event)'));
   const calls = [];
   const context = vm.createContext({
-    uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners, URL, URLSearchParams, Date, Intl, console, setTimeout, clearTimeout,
-    WHATSAPP_POLL_INTERVAL_MS: 60_000, WHATSAPP_IDLE_POLL_INTERVAL_MS: 120_000, WHATSAPP_SYNC_OVERLAP_MS: 2_000,
-    WHATSAPP_FULL_SYNC_AFTER_MS: 24 * 60 * 60 * 1000, WHATSAPP_SUPPORT_REFRESH_AFTER_MS: 24 * 60 * 60 * 1000, WHATSAPP_OVERVIEW_REFRESH_AFTER_MS: 24 * 60 * 60 * 1000,
+    bindLiveEvent, patchMarkup: (node,markup) => {node.innerHTML=markup;}, uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners, URL, URLSearchParams, Date, Intl, console, setTimeout, clearTimeout,
     window: { matchMedia: () => ({ matches: mobile }) },
+    config:{apiBaseUrl:'https://example.test/api'},pageTitle:{textContent:''},location:{hash:'#whatsapp'},WHATSAPP_SYNC_OVERLAP_MS:2000,
     document: { querySelector: () => null, querySelectorAll: () => [] },
     requestAnimationFrame: () => {},
     page: { innerHTML: '' },
@@ -66,6 +66,56 @@ function createHarness({ mobile = false } = {}) {
   context.recordCall = (path, options) => calls.push({ path, options });
   return { context, calls, wa: context.state.whatsapp };
 }
+
+test('background patches preserve editors even after focus leaves the composer', () => {
+  const {context,wa}=createHarness();
+  wa.selectedId='a';wa.conversations=structuredClone(conversations);
+  const editor={value:'Hello client',selectionStart:3,selectionEnd:7};
+  const panel={dataset:{chatConversationId:'a'}};
+  context.document.activeElement=editor;
+  context.document.querySelector=selector=>selector==='[data-chat-conversation-id]'?panel:selector==='#wa-message-input'?editor:null;
+  context.document.createElement=()=>({content:{querySelector:()=>({})}});
+  vm.runInContext(`fullPaints=0; patches=0; patchNode=()=>patches++;
+    renderWhatsappPage=()=>fullPaints++; bindReferenceWhatsapp=()=>{};
+    restoreWhatsappViewport=()=>{}; installWhatsappMediaScrollStability=()=>{};
+    for(let i=0;i<5;i++) renderWhatsappBackground();`,context);
+  assert.equal(context.fullPaints,0);assert.equal(context.patches,5);
+  assert.equal(context.document.activeElement,editor);assert.equal(editor.value,'Hello client');
+  assert.equal(editor.selectionStart,3);assert.equal(editor.selectionEnd,7);
+  context.document.activeElement=null;
+  vm.runInContext('renderWhatsappBackground()',context);
+  assert.equal(context.fullPaints,0,'no deferred whole-page repaint after blur');
+});
+
+test('background refresh renders a changed conversation and ignores another route', () => {
+  const {context,wa}=createHarness();
+  wa.selectedId='b';
+  context.document.activeElement={matches:()=>true};
+  context.document.querySelector=()=>({dataset:{chatConversationId:'a'}});
+  vm.runInContext('fullPaints=0; renderWhatsappPage=()=>fullPaints++; renderWhatsappBackground();',context);
+  assert.equal(context.fullPaints,1);
+  context.location.hash='#marketing';
+  vm.runInContext('renderWhatsappBackground()',context);
+  assert.equal(context.fullPaints,1);
+});
+
+test('message-only refresh patches history without replacing or binding the composer', () => {
+  const {context,wa}=createHarness();
+  wa.messages=[{messageId:'m',text:'New reply'}];wa.selectedId='a';
+  const history={innerHTML:''};
+  const editor={value:'Unfinished draft',selectionStart:4,selectionEnd:4};
+  context.document.activeElement=editor;
+  context.document.querySelector=selector=>selector==='#wa-message-list'?history:null;
+  vm.runInContext(`messageBinds=0; whatsappMessagesMarkup=()=>state.whatsapp.messages.map(m=>m.text).join('');
+    bindWhatsappMessageEvents=()=>messageBinds++; restoreWhatsappViewport=()=>{};
+    installWhatsappMediaScrollStability=()=>{}; refreshWhatsappMessagesDom();`,context);
+  assert.equal(history.innerHTML,'New reply');
+  assert.equal(context.messageBinds,1);
+  assert.equal(context.document.activeElement,editor);
+  assert.equal(editor.value,'Unfinished draft');
+  assert.equal(editor.selectionStart,4);
+  assert.equal(context.page.innerHTML,'');
+});
 
 test('generated inbox escapes client/user/tag content and retains existing CRM controls', () => {
   const { context, wa, calls } = createHarness();
@@ -176,11 +226,205 @@ test('empty inbox produces a complete render with the existing start-chat link',
   assert.ok(context.page.innerHTML.includes('0 of 0 loaded chats'));
 });
 
-test('idle inbox checks back off while selected open-window chats remain responsive', () => {
-  const { context, wa } = createHarness();
-  wa.unchangedPolls = 2;
-  assert.equal(vm.runInContext('whatsappPollDelay()', context), 120_000);
-  wa.conversations = [{ conversationId: 'a', customerServiceWindow: { open: true } }];
-  wa.selectedId = 'a';
-  assert.equal(vm.runInContext('whatsappPollDelay()', context), 60_000);
+test('marketing replies filter uses reply records and combines with owner filters', () => {
+  const items = [
+    {conversationId:'reply',lastMarketingReplyAt:new Date(),assignedTo:'ankit',unreadCount:0},
+    {conversationId:'unread',assignedTo:'ankit',unreadCount:3},
+    {conversationId:'other',lastMarketingReplyAt:new Date(),assignedTo:'reshu',unreadCount:1}
+  ];
+  assert.deepEqual(items.filter(item=>inboxMatches(item,{filter:'MARKETING',ownerFilter:'ankit'})).map(item=>item.conversationId),['reply']);
+  assert.equal(inboxCounts(items).MARKETING,2);
+});
+
+test('selecting attachments opens a review without uploading or sending', async () => {
+  const {context,calls}=createHarness();
+  const files=[{name:'sample.pdf',type:'application/pdf'},{name:'photo.jpg',type:'image/jpeg'}];
+  context.files=files;
+  vm.runInContext('previewReferenceAttachments = files => { previewedFiles = files; };',context);
+  await vm.runInContext('sendSelectedAttachment({target:{files,value:"chosen"}})',context);
+  assert.deepEqual(Array.from(context.previewedFiles),files);
+  assert.equal(calls.length,0);
+});
+
+test('bundled voice worker encodes microphone samples into an MP3 attachment', async () => {
+  let result;
+  const context=vm.createContext({Blob,Int16Array,Uint8Array,console,self:{postMessage:value=>{result=value;}}});
+  context.importScripts=name=>vm.runInContext(fs.readFileSync(new URL('../src/'+name,import.meta.url),'utf8'),context);
+  vm.runInContext(fs.readFileSync(new URL('../src/audio-encoder.js',import.meta.url),'utf8'),context);
+  const samples=Float32Array.from({length:44100},(_,i)=>Math.sin(2*Math.PI*440*i/44100)*0.2);
+  context.self.onmessage({data:{samples,sampleRate:44100}});
+  assert.equal(result.error,undefined);
+  assert.equal(result.blob.type,'audio/mpeg');
+  const bytes=new Uint8Array(await result.blob.arrayBuffer());
+  assert.ok(bytes.length>1000);
+  assert.equal(bytes[0],0xff);
+  assert.equal(bytes[1]&0xe0,0xe0);
+});
+
+test('large inbox renders 100 rows while search still finds clients beyond that page',()=>{
+  const {context,wa}=createHarness();
+  wa.conversations=Array.from({length:2000},(_,i)=>({conversationId:String(i),contact:{companyName:'Client '+i}}));
+  let html=vm.runInContext('waConversationList()',context);
+  assert.equal((html.match(/data-conversation-id=/g)||[]).length,100);
+  assert.ok(html.includes('1,900 remaining'));
+  wa.search='Client 1999';html=vm.runInContext('waConversationList()',context);
+  assert.ok(html.includes('data-conversation-id="1999"'));
+});
+
+test('cached chat paints before network and never reloads the inbox on chat switch',async()=>{
+  const {context,wa,calls}=createHarness();
+  wa.conversations=[{conversationId:'b',contactId:'cb',lastInboundAt:new Date(),contact:{contactId:'cb',companyName:'Client B'}}];
+  wa.cacheHydrated=true;wa.fullSyncedAt=Date.now();wa.metadataAt=Date.now();wa.cache={putMessages:()=>new Promise(()=>{})};
+  wa.recentChats.set('b',{messages:[{messageId:'old',conversationId:'b',text:'Cached reply',createdAt:new Date()}],overview:{contact:wa.conversations[0].contact,orders:[]},overviewCachedAt:Date.now()});
+  let release;
+  context.network=()=>new Promise(resolve=>{release=resolve;});context.paints=[];
+  vm.runInContext(`renderWhatsappPage=()=>paints.push(state.whatsapp.messages.map(m=>m.text));startWhatsappPolling=()=>{};api=async path=>{recordCall(path);return network();};`,context);
+  const loading=vm.runInContext("renderWhatsapp('b')",context);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(Array.from(context.paints[0]),['Cached reply']);
+  assert.equal(calls.length,1);assert.ok(calls[0].path.startsWith('/conversations/b/messages?'));
+  release({data:[{messageId:'new',conversationId:'b',text:'Fresh reply',createdAt:new Date()}]});
+  await loading;
+  assert.ok(context.paints.at(-1).includes('Fresh reply'));
+});
+
+test('late message response cannot overwrite a newer chat selection',async()=>{
+  const {context,wa}=createHarness();
+  wa.conversations=[{conversationId:'a',contactId:'ca'},{conversationId:'b',contactId:'cb'}];
+  wa.selectedId='a';wa.messagesConversationId='a';wa.overview={contact:{contactId:'ca'},orders:[]};wa.overviewCachedAt=Date.now();
+  let release;context.network=()=>new Promise(resolve=>{release=resolve;});
+  vm.runInContext('api=()=>network()',context);
+  const request=vm.runInContext("loadWhatsappConversation('a')",context);
+  wa.selectedId='b';wa.navigationVersion++;wa.messages=[{messageId:'b-message',text:'B stays visible'}];
+  release({data:[{messageId:'a-message',text:'Late A'}]});await request;
+  assert.equal(wa.messages[0].messageId,'b-message');
+});
+
+test('media previews reuse one fetch, expire and reset with the user session',async()=>{
+  const {context,wa}=createHarness();let downloads=0;
+  context.download=async()=>{downloads++;return {size:100};};
+  vm.runInContext('fetchAttachmentBlobUncached=()=>download()',context);
+  await Promise.all([vm.runInContext("fetchAttachmentBlob('file')",context),vm.runInContext("fetchAttachmentBlob('file')",context)]);
+  await vm.runInContext("fetchAttachmentBlob('file')",context);assert.equal(downloads,1);
+  wa.mediaCache.get('file').expiresAt=0;await vm.runInContext("fetchAttachmentBlob('file')",context);assert.equal(downloads,2);
+  vm.runInContext('state.whatsapp=freshWhatsappState()',context);
+  await vm.runInContext("fetchAttachmentBlob('file')",context);assert.equal(downloads,3);
+});
+
+test('a first inbox page becomes available while later pages are still pending',async()=>{
+  const {context}=createHarness();let release;let reads=0;
+  context.requestPage=()=>++reads===1?Promise.resolve({data:[{id:'first'}],pagination:{hasMore:true,nextCursor:'next'}}):new Promise(resolve=>{release=resolve;});
+  context.pages=[];vm.runInContext('api=()=>requestPage()',context);
+  const request=vm.runInContext("inboxAllPages('/conversations?limit=100',page=>pages.push(page.data[0].id))",context);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(Array.from(context.pages),['first']);
+  release({data:[{id:'last'}],pagination:{hasMore:false}});
+  const result=await request;assert.equal(result.data.length,2);
+});
+
+test('metadata revalidates on a cached inbox and concurrent refreshes share one request',async()=>{
+  const {context,wa,calls}=createHarness();wa.fullSyncedAt=Date.now();
+  vm.runInContext('renderWhatsappPage=()=>{};api=async path=>{recordCall(path);return {data:[]};}',context);
+  await Promise.all([vm.runInContext('ensureWhatsappMetadata()',context),vm.runInContext('ensureWhatsappMetadata()',context)]);
+  assert.equal(calls.length,4);assert.ok(wa.metadataAt>0);
+  await vm.runInContext('ensureWhatsappMetadata()',context);assert.equal(calls.length,4);
+});
+
+test('all filter badges agree with their matching lists including archived conversations',()=>{
+  const items=Array.from({length:80},(_,i)=>({conversationId:String(i),lastInboundAt:new Date(Date.now()-i*3600000),unreadCount:i%4,preferences:{archived:i%7===0,manualUnread:i%9===0},assignedTo:i%2?'a':'b',nextFollowUpAt:i%3?new Date():null,contact:{companyName:'Client '+i,tags:i%2?['IMPORTANT']:[]},lead:{interestLevel:i%2?'HIGH':'LOW',leadStatus:i%3?'FOLLOW_UP':'QUOTATION_SENT'}}));
+  for(const options of [{},{ownerFilter:'a'},{search:'Client 1'},{tagFilter:'IMPORTANT'}]){
+    for(const [filter,count] of Object.entries(inboxCounts(items,options))){
+      if(filter!=='messages')assert.equal(count,items.filter(item=>inboxMatches(item,{...options,filter})).length,filter);
+    }
+  }
+});
+
+test('marketing pagination still drains all saved batches independently of inbox progress',async()=>{
+  const {context}=createHarness();let page=0;
+  context.batchPage=()=>({data:[{campaignId:'batch'+(++page)}],pagination:{hasMore:page<2,nextCursor:page<2?'next':null}});
+  vm.runInContext('api=async()=>batchPage()',context);
+  const result=await vm.runInContext("loadAllBatchPages('/campaigns?limit=100')",context);
+  assert.equal(result.error,null);assert.equal(result.data.length,2);
+});
+
+test('batch progress handles drafts, partial last batches and overlapping provider failures', () => {
+  const {context}=createHarness();
+  const get=(campaign,count)=>{context.campaign=campaign;context.count=count;return vm.runInContext('batchProgress(campaign,count)',context);};
+  assert.equal(get({status:'DRAFT',stats:{total:0}},500).percent,0);
+  let progress=get({status:'ACTIVE',stats:{total:500,active:477,waiting:0,sent:23,failed:4}},500);
+  assert.equal(progress.processed,23);assert.equal(progress.percent,5);assert.equal(progress.failed,4);
+  progress=get({status:'ACTIVE',stats:{total:500,active:1,sent:499}},500);assert.equal(progress.percent,99);
+  progress=get({status:'COMPLETED',stats:{total:404,active:0,waiting:0,sent:400,skipped:4,failed:20}},404);
+  assert.equal(progress.processed,404);assert.equal(progress.percent,100);assert.equal(progress.total,404);
+  progress=get({status:'ACTIVE',stats:{total:500,active:0,waiting:500}},500);assert.equal(progress.percent,0);assert.equal(progress.label,'Waiting for replies…');
+  progress=get({status:'CANCELLED',stats:{total:0}},500);assert.equal(progress.percent,0);assert.equal(progress.label,'Cancelled');
+});
+
+test('batch polling updates progress using reads and ignores an obsolete page response', async () => {
+  const {context,calls}=createHarness();context.location.hash='#marketing';
+  context.state.marketing={audiences:[],campaigns:[]};
+  let callback,release;context.setTimeout=fn=>{callback=fn;return 1;};context.clearTimeout=()=>{};
+  context.network=()=>new Promise(resolve=>{release=resolve;});
+  vm.runInContext('api=async path=>{recordCall(path);return network();};startMarketingProgress();',context);
+  const polling=callback();
+  vm.runInContext('stopMarketingProgress()',context);context.location.hash='#whatsapp';
+  release({data:[{campaignId:'new'}],pagination:{hasMore:false}});await polling;
+  assert.equal(context.state.marketing.campaigns.length,0);
+  assert.equal(calls.length,1);assert.equal(calls[0].path,'/campaigns?limit=100');assert.equal(calls[0].options,undefined);
+});
+
+test('chat messages render without waiting for a slow or failed customer overview', async () => {
+  const {context,wa}=createHarness();
+  wa.selectedId='a';wa.conversations=[{conversationId:'a',contactId:'ca'}];
+  let rejectOverview;
+  context.network=path=>path.includes('/overview')?new Promise((_resolve,reject)=>{rejectOverview=reject;}):Promise.resolve({data:[{messageId:'new',text:'Fast reply',createdAt:'2026-09-14T00:00:00Z'}]});
+  vm.runInContext('api=path=>network(path);renderWhatsappBackground=()=>{};',context);
+  const loaded=await vm.runInContext("loadWhatsappConversation('a')",context);
+  assert.equal(loaded[0].messageId,'new');assert.equal(wa.messages[0].text,'Fast reply');assert.equal(wa.overview,null);
+  rejectOverview(new Error('slow optional overview failed'));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(wa.messages[0].text,'Fast reply');
+});
+
+test('overlapping message loads share one request and unchanged overlap does not repaint', async () => {
+  const {context,wa}=createHarness();wa.selectedId='a';wa.messagesConversationId='a';
+  wa.conversations=[{conversationId:'a',contactId:'ca'}];wa.overview={contact:{contactId:'ca'},orders:[]};wa.overviewCachedAt=Date.now();
+  wa.messages=[{messageId:'existing',text:'Same',createdAt:'2026-09-14T00:00:00Z'}];
+  let release,reads=0;context.network=()=>{reads++;return new Promise(resolve=>{release=resolve;});};
+  vm.runInContext('api=()=>network()',context);
+  const first=vm.runInContext("loadWhatsappConversation('a',{incremental:true})",context);
+  const second=vm.runInContext("loadWhatsappConversation('a',{incremental:true})",context);
+  assert.equal(reads,1);release({data:[{...wa.messages[0]}]});
+  const results=await Promise.all([first,second]);assert.equal(results[0].length,0);assert.equal(results[1].length,0);
+});
+
+test('concurrent mark-read refreshes share one request and cannot clear another chat', async () => {
+  const {context,wa}=createHarness();wa.selectedId='a';
+  wa.conversations=[{conversationId:'a',unreadCount:1},{conversationId:'b',unreadCount:2}];
+  wa.messages=[{messageId:'a1',direction:'INBOUND',status:'RECEIVED'}];
+  let release,reads=0;context.network=()=>{reads++;return new Promise(resolve=>{release=resolve;});};
+  vm.runInContext('api=()=>network()',context);
+  const first=vm.runInContext('markSelectedConversationRead()',context);
+  await vm.runInContext('markSelectedConversationRead()',context);assert.equal(reads,1);
+  wa.selectedId='b';wa.messages=[{messageId:'b1',direction:'INBOUND',status:'RECEIVED'}];
+  release({data:{conversationUnreadCount:0}});await first;
+  assert.equal(wa.messages[0].status,'RECEIVED');assert.equal(wa.conversations[1].unreadCount,2);
+});
+
+test('send acknowledgement appears before draft persistence and preserves text typed during send', async () => {
+  const {context,wa}=createHarness();wa.selectedId='a';wa.mode='TEXT';wa.drafts.a='First reply';
+  wa.conversations=[{conversationId:'a',contactId:'ca'}];wa.messages=[];
+  const input={value:'First reply',matches:()=>true};
+  const button={disabled:false,classList:{contains:()=>false}};
+  context.document.querySelector=selector=>selector==='#wa-message-input'?input:null;
+  context.document.body={contains:()=>true};
+  context.input=input;context.button=button;
+  let release;context.network=()=>new Promise(resolve=>{release=resolve;});
+  vm.runInContext("api=()=>network();whatsappWindow=()=>({open:true});notify=()=>{};renderWhatsappBackground=()=>{};refreshWhatsappMessage=async()=>null;saveSmartPreference=()=>new Promise(()=>{});",context);
+  const sending=vm.runInContext('sendWhatsappMessage({preventDefault(){},submitter:button})',context);
+  input.value='My next reply';wa.drafts.a='My next reply';
+  release({data:{queued:true,messageId:'queued-real-id'}});await sending;
+  assert.equal(input.value,'My next reply');assert.equal(wa.drafts.a,'My next reply');
+  assert.equal(wa.messages[0].messageId,'queued-real-id');assert.equal(wa.messages[0].status,'QUEUED');assert.equal(wa.messages[0].text,'First reply');
+  assert.equal(button.disabled,false);
 });
