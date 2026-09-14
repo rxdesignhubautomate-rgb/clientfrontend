@@ -90,7 +90,7 @@ export async function openSendingSettings({ api, onChanged }) {
   if (autoButton) autoButton.onclick = () => {
     formDialog('Activate sending', '<p>Automatically reconciles contacts and message history, then enables sending directly (no internal-test or pilot stage). This can take a few minutes for a large contact base.</p>' +
       field('Reason', 'reason', 'Administrator authorizes direct sending of approved batches') +
-      '<p data-auto-status role="status"></p>', async (values, activeDialog) => {
+      '<p data-auto-status role="status"></p><div data-unresolved-list></div>', async (values, activeDialog) => {
       const status = activeDialog.querySelector('[data-auto-status]');
       let result;
       do {
@@ -100,14 +100,25 @@ export async function openSendingSettings({ api, onChanged }) {
         result = await request('/history/prepare', {}, 'POST');
       } while (!result.complete);
       if (!result.ready) {
+        if (result.held) await renderUnresolved(activeDialog);
         throw new Error(result.held
-          ? `${result.held} message(s) have uncertain delivery/opt-out history and need manual review before sending can be enabled. Sending remains paused.`
+          ? `${result.held} message(s) have uncertain delivery/opt-out history — review each below (checks against your WhatsApp provider records), then click Activate sending again.`
           : 'Preparation did not complete. Reopen Sending settings and try again.');
       }
       status.textContent = 'Preparation complete. Enabling sending…';
       await request('/settings', { enabled: true, reason: values.reason, directActivation: true });
       close(); await onChanged();
     }, 'Activate sending');
+    async function renderUnresolved(activeDialog) {
+      const list = activeDialog.querySelector('[data-unresolved-list]'), unresolved = await request('/messages/unresolved');
+      list.innerHTML = unresolved.items.length ? unresolved.items.map(item => `<article class="crm-workspace-row" data-unresolved-row="${esc(item.messageId)}"><div><strong>${esc(item.companyName)}</strong><p>${esc(item.destination || item.contactId)} · ${esc(stamp(item.createdAt))}</p></div><button type="button" class="button button-secondary" data-reconcile-inline="${esc(item.messageId)}">Review unknown result</button></article>`).join('')
+        : '<p>No unresolved messages found for your account scope. If the count above is nonzero, sign in as an owner/admin or ask them to review — item visibility follows normal record access.</p>';
+      list.querySelectorAll('[data-reconcile-inline]').forEach(button => { button.onclick = () => formDialog('Reconcile unknown submission', `<p>Check the provider record first. A timeout does not mean failure. Neither decision automatically resends the message.</p>${select('Verified result', 'outcome', [['ACCEPTED', 'Provider accepted it'], ['NOT_ACCEPTED', 'Provider definitively did not accept it']])}<label class="field">Provider message ID (required for accepted)<input name="providerMessageId" /></label>${field('Provider evidence reference', 'evidenceReference')}${field('Review reason', 'reason')}`, async values => {
+        if (!values.providerMessageId) delete values.providerMessageId;
+        await request(`/messages/${button.dataset.reconcileInline}/reconcile`, values);
+        activeDialog.querySelector(`[data-unresolved-row="${button.dataset.reconcileInline}"]`)?.remove();
+      }); });
+    }
   };
   dialog.querySelector('[data-toggle]').onclick = () => {
     formDialog(settings.enabled ? 'Pause sending' : 'Enable sending', (settings.enabled ? '' : '<p>Enable sending to approved campaign recipients directly, without an internal-test or pilot stage. STOP, opt-out and delivery-history checks still apply.</p>') + field('Reason', 'reason', settings.enabled ? '' : 'Administrator authorizes direct sending of approved batches'), async values => {
