@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#008069" />
+    <title>RX Client CRM</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/quotation.css" />
+    <link rel="stylesheet" href="/whatsapp-style.css?v=1" />
+    <link rel="stylesheet" href="/smart-inbox.css?v=2" />
+    <link rel="stylesheet" href="/reference-whatsapp.css?v=1" />
+  </head>
+  <body>
+    <div id="toast" class="toast" hidden></div>
+    <section id="login-view" class="login-page">
+      <div class="login-art">
+        <div class="brand brand-large"><span class="brand-mark">RX</span><span>Client CRM</span></div>
+        <div class="login-copy">
+          <p class="eyebrow">RX DESIGN HUB</p>
+          <h1>Every client.<br />Every order.<br /><em>One clear view.</em></h1>
+          <p>Existing clients, order history, payments, follow-ups and WhatsApp conversations—connected in one workspace.</p>
+        </div>
+        <div class="art-orb art-orb-one"></div><div class="art-orb art-orb-two"></div>
+      </div>
+      <div class="login-panel">
+        <form id="login-form" class="login-card">
+          <div class="mobile-brand brand"><span class="brand-mark">RX</span><span>Client CRM</span></div>
+          <p class="eyebrow">SECURE ACCESS</p>
+          <h2>Welcome back</h2>
+          <p class="muted">Sign in with your approved Firebase account.</p>
+          <label>Email<input id="login-email" type="email" autocomplete="email" required placeholder="you@rxdesignhub.com" /></label>
+          <label>Password<input id="login-password" type="password" autocomplete="current-password" minlength="6" required placeholder="Enter password" /></label>
+          <p id="login-error" class="form-error" hidden></p>
+          <button id="login-submit" class="button button-primary button-full" type="submit">Sign in <span>→</span></button>
+          <p id="login-help" class="login-help">Account access is controlled by Firebase Authentication.</p>
+        </form>
+      </div>
+    </section>
+
+    <div id="app-shell" class="app-shell" hidden>
+      <aside class="sidebar">
+        <a class="brand sidebar-brand" href="#dashboard"><span class="brand-mark">RX</span><span>Client CRM</span></a>
+        <nav>
+          <a data-route="dashboard" href="#dashboard" title="Overview" aria-label="Overview"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></span><span class="nav-label">Overview</span></a>
+          <a data-route="whatsapp" href="#whatsapp" title="WhatsApp Inbox" aria-label="WhatsApp Inbox"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H5l-3 2V11.5A8.5 8.5 0 0 1 10.5 3h2a8.5 8.5 0 0 1 8.5 8.5Z"/><path d="M7 9h10M7 13h7"/></svg></span><span class="nav-label">WhatsApp Inbox</span></a>
+          <a data-route="marketing" href="#marketing" title="Marketing" aria-label="Marketing"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m3 10 14-6v16L3 14Zm14-2h3v8h-3M5 15l2 6h3l-2-5"/></svg></span><span class="nav-label">Marketing</span></a>
+          <a data-route="quotations" href="#quotations" title="Quotations" aria-label="Quotations"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10l4 4v14H5ZM14 3v5h5M8 12h8M8 16h8"/></svg></span><span class="nav-label">Quotations</span></a>
+          <a data-route="clients" href="#clients" title="Clients" aria-label="Clients"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="9" cy="7" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v3"/></svg></span><span class="nav-label">Clients</span></a>
+          <a data-route="import" data-owner-only href="#import" title="Import register" aria-label="Import register"><span class="nav-icon"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 16V3m-5 5 5-5 5 5M3 15v6h18v-6"/></svg></span><span class="nav-label">Import register</span></a>
+        </nav>
+        <div class="sidebar-foot">
+          <div class="user-chip"><span id="user-avatar">R</span><div><strong id="user-email">CRM User</strong><small>RX Design Hub</small></div></div>
+          <button id="logout-button" class="text-button" type="button" title="Sign out" aria-label="Sign out"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M9 3H3v18h6M9 12h12m-4-4 4 4-4 4"/></svg><span class="sr-only">Sign out</span></button>
+        </div>
+      </aside>
+      <main class="main">
+        <header class="topbar">
+          <button id="menu-button" class="menu-button" type="button" aria-label="Menu"><svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h16M4 12h16M4 18h16"/></svg></button>
+          <div><p class="eyebrow">CLIENT OPERATIONS</p><h2 id="page-title">Overview</h2></div>
+          <div class="live-pill" title="CRM data connection"><i></i><span>Not synced yet</span></div>
+        </header>
+        <div id="page" class="page"><div class="loading-card">Loading CRM…</div></div>
+      </main>
+    </div>
+
+    <script src="/config.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
