@@ -60,7 +60,30 @@ export async function openSendingSettings({ api, onChanged }) {
     <p>Organization sending: <strong>${settings.enabled ? 'Enabled' : 'Paused'}</strong> · Stage: ${esc(pretty(settings.rolloutStage) || 'Not configured')}</p>
     <p>Enabling sending can release queued marketing messages. Approved batches can then be started from Marketing.</p>
     <div class="form-actions"><button type="button" class="button button-primary" data-toggle ${!settings.enabled && !configured ? 'disabled' : ''}>${settings.enabled ? 'Pause sending' : 'Enable sending'}</button>
-    <button type="button" class="button button-secondary" data-rollout>Rollout settings</button></div>`);
+    <button type="button" class="button button-secondary" data-rollout>Rollout settings</button>
+    <button type="button" class="button button-secondary" data-history ${settings.enabled ? 'disabled' : ''}>Prepare contacts & message history</button></div>
+    ${!settings.rolloutStage ? '<p>Rollout is not configured. After preparing the data, open Rollout settings before enabling sending.</p>' : ''}
+    <p data-history-status role="status"></p>`);
+  dialog.querySelector('[data-history]').onclick = async event => {
+    const button = event.currentTarget, status = dialog.querySelector('[data-history-status]');
+    button.disabled = true;
+    const toggle = dialog.querySelector('[data-toggle]'), rollout = dialog.querySelector('[data-rollout]');
+    toggle.disabled = true; rollout.disabled = true;
+    try {
+      let result;
+      do {
+        status.textContent = result?.phase === 'suppression'
+          ? `Checking saved STOP and opt-out records: ${result.scanned} of ${result.totalContacts} contacts prepared…`
+          : `Reconciling message history${result ? `: ${result.scanned} messages checked` : ''}…`;
+        result = await request('/history/prepare', {}, 'POST');
+      } while (!result.complete && dialog.isConnected);
+      status.textContent = result.ready
+        ? `Contact exclusions and history are prepared (${result.scanned} messages checked). ${settings.rolloutStage ? 'You can now try Enable sending.' : 'Open Rollout settings next, then enable sending.'}`
+        : result.complete ? `${result.held} uncertain or incomplete messages need review against provider records. Sending remains paused.`
+        : 'Scan paused. Reopen Sending settings to continue.';
+    } catch (error) { status.textContent = error.status === 404 ? 'Deploy the updated backend to use history reconciliation.' : error.message; }
+    finally { button.disabled = false; toggle.disabled = !settings.enabled && !configured; rollout.disabled = false; }
+  };
   dialog.querySelector('[data-toggle]').onclick = () => {
     formDialog(settings.enabled ? 'Pause sending' : 'Enable sending', field('Reason', 'reason'), async values => {
       await request('/settings', { enabled: !settings.enabled, reason: values.reason });
