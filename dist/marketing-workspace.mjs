@@ -62,7 +62,7 @@ export async function openSendingSettings({ api, onChanged }) {
     <div class="form-actions"><button type="button" class="button button-primary" data-toggle ${!settings.enabled && !configured ? 'disabled' : ''}>${settings.enabled ? 'Pause sending' : 'Enable sending'}</button>
     <button type="button" class="button button-secondary" data-rollout>Rollout settings</button>
     <button type="button" class="button button-secondary" data-history ${settings.enabled ? 'disabled' : ''}>Prepare contacts & message history</button></div>
-    ${!settings.rolloutStage ? '<p>Rollout is not configured. After preparing the data, open Rollout settings before enabling sending.</p>' : ''}
+    <p>Administrators can enable approved batches directly after preparing contacts and message history. Internal-test and pilot forms are optional.</p>
     <p data-history-status role="status"></p>`);
   dialog.querySelector('[data-history]').onclick = async event => {
     const button = event.currentTarget, status = dialog.querySelector('[data-history-status]');
@@ -78,15 +78,15 @@ export async function openSendingSettings({ api, onChanged }) {
         result = await request('/history/prepare', {}, 'POST');
       } while (!result.complete && dialog.isConnected);
       status.textContent = result.ready
-        ? `Contact exclusions and history are prepared (${result.scanned} messages checked). ${settings.rolloutStage ? 'You can now try Enable sending.' : 'Open Rollout settings next, then enable sending.'}`
+        ? `Contact exclusions and history are prepared (${result.scanned} messages checked). You can now enable sending directly.`
         : result.complete ? `${result.held} uncertain or incomplete messages need review against provider records. Sending remains paused.`
         : 'Scan paused. Reopen Sending settings to continue.';
     } catch (error) { status.textContent = error.status === 404 ? 'Deploy the updated backend to use history reconciliation.' : error.message; }
     finally { button.disabled = false; toggle.disabled = !settings.enabled && !configured; rollout.disabled = false; }
   };
   dialog.querySelector('[data-toggle]').onclick = () => {
-    formDialog(settings.enabled ? 'Pause sending' : 'Enable sending', field('Reason', 'reason'), async values => {
-      await request('/settings', { enabled: !settings.enabled, reason: values.reason });
+    formDialog(settings.enabled ? 'Pause sending' : 'Enable sending', (settings.enabled ? '' : '<p>Enable sending to approved campaign recipients directly, without an internal-test or pilot stage. STOP, opt-out and delivery-history checks still apply.</p>') + field('Reason', 'reason', settings.enabled ? '' : 'Administrator authorizes direct sending of approved batches'), async values => {
+      await request('/settings', { enabled: !settings.enabled, reason: values.reason, directActivation: !settings.enabled });
       close(); await onChanged();
     }, settings.enabled ? 'Pause sending' : 'Enable sending');
   };
