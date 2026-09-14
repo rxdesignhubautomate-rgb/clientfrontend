@@ -2,7 +2,8 @@ import { patchMarkup, patchNode, bindLiveEvent } from "./dom-patch.mjs";
 import { createChatCache } from "./chat-cache.js";
 import { uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners } from "./inbox-style.js";
 import { mountClientDirectory, openClassificationReview } from "./client-directory.mjs";
-import { mountMarketingWorkspace, mountContactWorkspace } from './marketing-workspace.mjs';
+import { mountContactWorkspace } from './marketing-workspace.mjs';
+import { sendingAvailability, previewActions, approvePreview } from './simple-marketing-flow.mjs';
 
 const config = window.__CRM_CONFIG__ || {};
 const authKey = "rx-crm-session-v1";
@@ -2241,34 +2242,28 @@ async function renderMarketing() {
   stopMarketingProgress();
   pageTitle.textContent = "Marketing";
   page.innerHTML = '<div class="empty-state">Loading your batches…</div>';
-  try {
-    const { data: capabilities } = await api('/marketing-workspace/capabilities');
-    if (location.hash !== '#marketing') return;
-    if (capabilities.enabled) return mountMarketingWorkspace({ page, api, capabilities, notify, uploadAsset: uploadMarketingAsset, onLegacyPreview: showSimpleCampaignPreview,
-      attachmentUrl: async id => (await api(`/attachments/${encodeURIComponent(id)}`)).data.signedUrl,
-      active: () => location.hash === '#marketing' && Boolean(state.session) });
-  } catch (error) {
-    if (error.status !== 404) throw error;
-  }
-  const [summary, audiences, campaigns] = await Promise.all([
+  page.onclick = null;
+  const [summary, audiences, campaigns, sending] = await Promise.all([
     optionalMarketingApi("/marketing/summary"),
     loadAllBatchPages("/marketing/audiences?limit=100"),
-    loadAllBatchPages("/campaigns?limit=100")
+    loadAllBatchPages("/campaigns?limit=100"),
+    sendingAvailability(api)
   ]);
   if (location.hash && location.hash !== "#marketing") return;
-  state.marketing = { ...freshMarketingState(), audiences: audiences.data, campaigns: campaigns.data, strictCampaignLifecycle: true };
+  state.marketing = { ...freshMarketingState(), audiences: audiences.data, campaigns: campaigns.data, strictCampaignLifecycle: true, sending };
   const counts = summary.error ? null : summary.data;
   const sorted = [...campaigns.data].sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { numeric: true }));
   const history = sorted.filter(item => ["COMPLETED", "CANCELLED", "FAILED"].includes(item.status));
   const active = sorted.filter(item => !history.includes(item));
   page.innerHTML = `<div class="simple-marketing">
-    <div class="section-head"><div><h1>Marketing</h1><p>Your contacts. Your batches. Preview before sending.</p></div><div class="simple-header-actions"><a class="button button-secondary" href="#whatsapp">View replies</a><button class="button button-secondary" id="refresh-marketing">Refresh</button></div></div>
+    <div class="section-head"><div><h1>Marketing</h1><p>Preview → Approve → Start</p></div><div class="simple-header-actions"><a class="button button-secondary" href="#whatsapp">View replies</a><button class="button button-secondary" id="refresh-marketing">Refresh</button></div></div>
     <div class="simple-marketing-metrics">
       ${miniStat("Total contacts", counts ? formatCount(counts.totalContacts) : "—")}
       ${miniStat("Replied", counts ? formatCount(counts.replied) : "—")}
       ${miniStat("Opted out", counts ? formatCount(counts.optedOut) : "—")}
     </div>
-    <p class="muted simple-count-note">Replied counts unique contacts with a recorded marketing reply. Opted-out contacts are excluded from sending.${counts?.calculatedAt ? ` Counts updated ${esc(shortTime(counts.calculatedAt))}; refresh within 30 seconds may reuse these counts.` : ''}</p>
+    <p class="muted simple-count-note">Choose a batch, check the message, approve it, then press Start. Opted-out contacts are excluded.</p>
+    ${sending.message ? `<p class="form-error" role="status">${esc(sending.message)}</p>` : ''}
     ${summary.error ? '<div class="form-error">Contact counts could not load. Deploy the updated backend, then refresh.</div>' : ""}
     <section class="panel"><div class="panel-title-row"><div><h3>Your batches</h3><p>Open a batch to check the message and video.</p></div><span class="count-pill">${active.length} batches</span></div>
       ${campaigns.error || audiences.error ? `<div class="form-error">Some batches could not load completely. ${esc(campaigns.error || audiences.error)}</div>` : ""}
@@ -2395,20 +2390,33 @@ async function showSimpleCampaignPreview(campaignId, button) {
     const variants = data.steps.flatMap((step, index) => step.variants.map(variant => ({ ...variant, step: index + 1, delay: step.delayMinutes })));
     if (!variants.length) throw new Error("This batch has no message to preview.");
     const multiple = variants.length > 1;
-    content.innerHTML = `<p class="muted">${formatCount(data.contactCount)} contacts · ${esc(pretty(campaign.status))}</p>
+    content.innerHTML = `<p class="muted" data-preview-status>${formatCount(data.contactCount)} contacts · ${esc(pretty(campaign.status))}</p>
       ${multiple ? `<label class="field" for="batch-preview-variant">Message preview<select id="batch-preview-variant">${variants.map((variant, index) => `<option value="${index}">${data.steps.length > 1 ? `Step ${variant.step} · ` : ""}${esc(variant.label)}</option>`).join("")}</select></label>` : ""}
       <p class="muted tiny-note simple-sample-hint"></p>
       ${multiple ? '<p class="muted tiny-note">Clients who replied in the last 24 hours can receive the recent-reply message. Other clients receive the template.</p>' : ""}
       <div class="simple-message-stage"></div>
       <p class="muted tiny-note">Preview shows the current saved content. Previously sent messages are in the <a href="#whatsapp">WhatsApp Inbox</a>.</p>
-      <div class="simple-preview-actions">${campaignActionButtons(campaign)}</div>`;
-    content.querySelector('[data-campaign-action="details"]')?.remove();
-    content.querySelector('[data-campaign-action="schedule"]')?.remove();
-    const actionLabels = { submit: "Submit for approval", approve: "Approve batch", start: "Send this batch", cancel: "Cancel batch" };
-    content.querySelectorAll(".campaign-action").forEach(actionButton => {
-      actionButton.textContent = actionLabels[actionButton.dataset.campaignAction] || actionButton.textContent;
-      actionButton.addEventListener("click", async () => { if (await changeCampaignState(actionButton)) close(); });
-    });
+      <p class="muted tiny-note" data-preview-sending></p>
+      <div class="simple-preview-actions"></div>`;
+    const drawActions = current => {
+      const sending = state.marketing.sending;
+      content.querySelector('[data-preview-status]').textContent = `${formatCount(data.contactCount)} contacts · ${pretty(current.status)}`;
+      content.querySelector('[data-preview-sending]').textContent = sending?.message || 'Approval saves this batch. Sending begins only when you press Start.';
+      const actions = content.querySelector('.simple-preview-actions');
+      actions.innerHTML = previewActions(current.status, state.session?.role).map(([action, label]) => `<button class="button ${action === 'cancel' ? 'button-secondary' : 'button-primary'} campaign-action" data-campaign-action="${action}" data-campaign-id="${attr(current.campaignId)}" ${['start', 'resume'].includes(action) && sending?.allowed === false ? 'disabled' : ''}>${label}</button>`).join('');
+      actions.querySelectorAll('.campaign-action').forEach(actionButton => actionButton.addEventListener('click', async () => {
+        if (actionButton.dataset.campaignAction !== 'approve-preview') { if (await changeCampaignState(actionButton)) close(); return; }
+        actions.querySelectorAll('button').forEach(control => { control.disabled = true; });
+        try {
+          const approved = await approvePreview(api, current.campaignId);
+          if (!backdrop.isConnected) return;
+          drawActions(approved);
+          notify('Batch approved. Press Start when you are ready.');
+          actions.querySelector('button')?.focus();
+        } catch (error) { if (backdrop.isConnected) drawActions(current); notify(error.message, true); }
+      }));
+    };
+    drawActions(campaign);
     let renderId = 0;
     const mediaCache = new Map();
     const renderVariant = async index => {
@@ -2658,6 +2666,11 @@ function campaignActionButtons(campaign) {
 
 async function changeCampaignState(button) {
   const action = button.dataset.campaignAction;
+  if (['start', 'resume', 'launch'].includes(action)) {
+    const sending = await sendingAvailability(api);
+    state.marketing.sending = sending;
+    if (!sending.allowed) { notify(sending.message, true); return false; }
+  }
   if (action === "details") return showCampaignDetails(button.dataset.campaignId, button);
   if (action === "launch" && !confirm("Launch this draft now? Only contacts with recorded opt-in will receive it.")) return;
   if (action === "cancel" && !confirm("Cancel this campaign? Pending messages will stop.")) return;
