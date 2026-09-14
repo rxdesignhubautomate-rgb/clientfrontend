@@ -63,7 +63,9 @@ export async function openSendingSettings({ api, onChanged }) {
     <button type="button" class="button button-secondary" data-rollout>Rollout settings</button>
     <button type="button" class="button button-secondary" data-history ${settings.enabled ? 'disabled' : ''}>Prepare contacts & message history</button></div>
     <p>Administrators can enable approved batches directly after preparing contacts and message history. Internal-test and pilot forms are optional.</p>
-    <p data-history-status role="status"></p>`);
+    <p data-history-status role="status"></p>
+    ${!settings.enabled ? `<div class="form-actions"><button type="button" class="button button-primary" data-auto-activate ${!configured ? 'disabled' : ''}>Activate sending (one click)</button></div>
+    <p class="muted">Runs the contact/history preparation automatically, then enables sending directly — no internal-test or pilot stage. STOP, opt-out and delivery-history checks still apply to every message.</p>` : ''}`);
   dialog.querySelector('[data-history]').onclick = async event => {
     const button = event.currentTarget, status = dialog.querySelector('[data-history-status]');
     button.disabled = true;
@@ -83,6 +85,29 @@ export async function openSendingSettings({ api, onChanged }) {
         : 'Scan paused. Reopen Sending settings to continue.';
     } catch (error) { status.textContent = error.status === 404 ? 'Deploy the updated backend to use history reconciliation.' : error.message; }
     finally { button.disabled = false; toggle.disabled = !settings.enabled && !configured; rollout.disabled = false; }
+  };
+  const autoButton = dialog.querySelector('[data-auto-activate]');
+  if (autoButton) autoButton.onclick = () => {
+    formDialog('Activate sending', '<p>Automatically reconciles contacts and message history, then enables sending directly (no internal-test or pilot stage). This can take a few minutes for a large contact base.</p>' +
+      field('Reason', 'reason', 'Administrator authorizes direct sending of approved batches') +
+      '<p data-auto-status role="status"></p>', async (values, activeDialog) => {
+      const status = activeDialog.querySelector('[data-auto-status]');
+      let result;
+      do {
+        status.textContent = result?.phase === 'suppression'
+          ? `Checking saved STOP and opt-out records: ${result.scanned} of ${result.totalContacts} contacts prepared…`
+          : `Reconciling message history${result ? `: ${result.scanned} messages checked` : ''}…`;
+        result = await request('/history/prepare', {}, 'POST');
+      } while (!result.complete);
+      if (!result.ready) {
+        throw new Error(result.held
+          ? `${result.held} message(s) have uncertain delivery/opt-out history and need manual review before sending can be enabled. Sending remains paused.`
+          : 'Preparation did not complete. Reopen Sending settings and try again.');
+      }
+      status.textContent = 'Preparation complete. Enabling sending…';
+      await request('/settings', { enabled: true, reason: values.reason, directActivation: true });
+      close(); await onChanged();
+    }, 'Activate sending');
   };
   dialog.querySelector('[data-toggle]').onclick = () => {
     formDialog(settings.enabled ? 'Pause sending' : 'Enable sending', (settings.enabled ? '' : '<p>Enable sending to approved campaign recipients directly, without an internal-test or pilot stage. STOP, opt-out and delivery-history checks still apply.</p>') + field('Reason', 'reason', settings.enabled ? '' : 'Administrator authorizes direct sending of approved batches'), async values => {
