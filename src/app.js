@@ -2677,6 +2677,7 @@ async function changeCampaignState(button) {
   if (action === "launch" && !confirm("Launch this draft now? Only contacts with recorded opt-in will receive it.")) return;
   if (action === "cancel" && !confirm("Cancel this campaign? Pending messages will stop.")) return;
   if (action === "start" && !confirm("Start this approved campaign now? Only eligible opted-in customers will be enrolled.")) return;
+  if (action === "retry-failed" && !confirm("Retry every message in this batch that permanently failed? Ones that already sent are left alone.")) return;
   let body = {};
   if (action === "schedule") {
     const answer = prompt("Campaign start date/time (example: 2026-07-25 10:30)", datetimeLocalValue(new Date(Date.now() + 60 * 60 * 1000)).replace("T", " "));
@@ -2688,8 +2689,8 @@ async function changeCampaignState(button) {
   button.disabled = true;
   try {
     const campaignBase = state.marketing.strictCampaignLifecycle ? "/campaigns" : "/marketing/campaigns";
-    await api(`${campaignBase}/${encodeURIComponent(button.dataset.campaignId)}/${action}`, { method: "POST", body });
-    const messages = { launch: "launched", submit: "submitted for approval", approve: "approved", schedule: "scheduled", start: "started", pause: "paused", resume: "resumed", cancel: "cancelled" };
+    const { data } = await api(`${campaignBase}/${encodeURIComponent(button.dataset.campaignId)}/${action}`, { method: "POST", body });
+    const messages = { launch: "launched", submit: "submitted for approval", approve: "approved", schedule: "scheduled", start: "started", pause: "paused", resume: "resumed", cancel: "cancelled", "retry-failed": data?.retried ? `${data.retried} failed message(s) requeued` : "no failed messages found" };
     notify(`Campaign ${messages[action] || "updated"}.`);
     await renderMarketing();
     return true;

@@ -19,6 +19,7 @@ export function previewActions(status, role) {
   if (['APPROVED', 'SCHEDULED'].includes(status)) actions.push(['start', 'Start']);
   if (['ACTIVE', 'RUNNING'].includes(status)) actions.push(['pause', 'Pause']);
   if (status === 'PAUSED') actions.push(['resume', 'Resume']);
+  if (['COMPLETED', 'PAUSED'].includes(status) && admin) actions.push(['retry-failed', 'Retry failed']);
   if (!['COMPLETED', 'CANCELLED', 'FAILED'].includes(status)) actions.push(['cancel', 'Cancel batch']);
   return actions;
 }
