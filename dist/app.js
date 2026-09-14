@@ -737,7 +737,7 @@ function waConversationList() {
 function waMessage(message, visibleIds = null) {
   const internal = message.direction === "INTERNAL";
   const outbound = message.direction === "OUTBOUND";
-  const status = outbound ? messageStatusMarkup(message.status) : "";
+  const status = outbound ? messageStatusMarkup(message.status, message.errorCode, message.errorMessage) : "";
   const quoted = message.replyTo || (message.replyToMessageId
     ? state.whatsapp.messages.find((item) => item.messageId === message.replyToMessageId)
     : null);
@@ -2108,7 +2108,7 @@ function fileMatchesTemplateHeader(file, type) {
   if (expected === "DOCUMENT") return Boolean(file);
   return false;
 }
-function messageStatusMarkup(status) {
+function messageStatusMarkup(status, errorCode = null, errorMessage = null) {
   const normalized = String(status || "QUEUED").toUpperCase();
   const label = ({
     QUEUED: "Queued",
@@ -2120,7 +2120,9 @@ function messageStatusMarkup(status) {
     CANCELLED: "Cancelled"
   })[normalized] || pretty(normalized);
   if (["QUEUED", "SENDING"].includes(normalized)) {
-    return `<span class="wa-delivery-status ${normalized.toLowerCase()}" role="img" aria-label="${attr(label)}" title="${attr(label)}"><span class="wa-status-clock"></span></span>`;
+    const reason = deliveryHoldReason(errorCode, errorMessage);
+    const title = reason ? `${label} · ${reason}` : label;
+    return `<span class="wa-delivery-status ${normalized.toLowerCase()}" role="img" aria-label="${attr(title)}" title="${attr(title)}"><span class="wa-status-clock"></span><span class="wa-status-label">${esc(label)}</span></span>`;
   }
   if (["FAILED", "CANCELLED", "DELIVERY_UNKNOWN"].includes(normalized)) {
     return `<span class="wa-delivery-status failed" role="img" aria-label="${attr(label)}" title="${attr(label)}">!</span>`;
@@ -2129,6 +2131,26 @@ function messageStatusMarkup(status) {
     ? '<path d="M2 7.2 5.2 10.2 12.8 2.6"></path>'
     : '<path d="M1.5 7.2 4.6 10.2 9.5 5.2"></path><path d="M6.8 7.2 9.8 10.2 15.8 3.2"></path>';
   return `<span class="wa-delivery-status ${normalized.toLowerCase()}" role="img" aria-label="${attr(label)}" title="${attr(label)}"><svg viewBox="0 0 18 13" aria-hidden="true">${paths}</svg></span>`;
+}
+function deliveryHoldReason(code, message) {
+  const labels = {
+    MARKETING_PAUSED: "Marketing is paused",
+    CAMPAIGN_PAUSED: "Campaign is paused",
+    QUIET_HOURS: "Waiting for business hours",
+    ENROLLMENT_NOT_READY: "Preparing recipient",
+    ROLLOUT_REVIEW_REQUIRED: "Rollout review required",
+    RECIPIENT_OUTSIDE_ROLLOUT_ALLOWLIST: "Recipient is outside the approved rollout",
+    SENDER_PERMISSION_REVOKED: "Sender permission needs review",
+    SUPPRESSED: "Recipient is suppressed",
+    PERMISSION_UNKNOWN: "Marketing permission needs review",
+    CONTENT_EXPIRED_OR_REVOKED: "Approved content needs review",
+    TEMPLATE_CHANGED_REVIEW_REQUIRED: "Template changed; review required",
+    SNAPSHOT_MISMATCH: "Batch snapshot changed; review required"
+  };
+  const known = labels[String(code || "").toUpperCase()];
+  if (known) return known;
+  const text = String(message || "").trim();
+  return text.length > 0 && text.length <= 140 ? text : "Waiting for the sender or worker";
 }
 function shortTime(value) { const parsed = asDate(value); return parsed ? new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit" }).format(parsed) : ""; }
 function asDate(value) { if (!value) return null; if (value._seconds) return new Date(value._seconds * 1000); const parsed = new Date(value); return Number.isNaN(parsed.getTime()) ? null : parsed; }

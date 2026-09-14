@@ -9,6 +9,12 @@ const field = (label, name, value = '', type = 'text') => `<label class="field">
 const select = (label, name, options) => `<label class="field">${esc(label)}<select name="${name}">${options.map(([value, text]) => `<option value="${esc(value)}">${esc(text)}</option>`).join('')}</select></label>`;
 const action = (name, label, disabled = false) => `<button type="button" class="button button-secondary" data-action="${name}" ${disabled ? 'disabled' : ''}>${label}</button>`;
 const stamp = value => { if (!value) return 'Unknown'; const date = new Date(value._seconds ? value._seconds * 1000 : value); return Number.isNaN(+date) ? 'Unknown' : date.toLocaleString(); };
+function marketingBannerDetail(capabilities) {
+  if (!capabilities.dispatchConfigured) return 'Live sending is disabled by the production setting. You can still preview, approve and review batches.';
+  if (!capabilities.settings.enabled) return 'Safety pause is active. Queued marketing messages remain held until an authorised rollout is activated.';
+  if (!capabilities.settings.rolloutStage) return 'A reviewed rollout stage is required before any batch can be started.';
+  return `Live dispatch is configured · ${pretty(capabilities.settings.rolloutStage)} rollout · every message is checked again before sending.`;
+}
 
 function templateExtras(components = []) {
   return components.map(component => {
@@ -53,7 +59,7 @@ export async function mountMarketingWorkspace({ page, api, capabilities, notify,
   const formDialog = (...args) => { const dialog = baseFormDialog(...args); attachLookupFields(dialog, api); return dialog; };
   let tab = 'campaigns', cursor = null, cursors = [], next = null, generation = 0;
   page.innerHTML = `<div class="section-head"><div><h1>Marketing</h1><p>Choose clients → preview → approve → send a batch.</p></div><a class="button button-secondary" href="#whatsapp">View replies</a></div>
-    <div class="crm-marketing-banner" role="status"><strong>${capabilities.settings.enabled ? 'Marketing enabled' : 'Marketing paused'}</strong><span>${capabilities.dispatchConfigured ? 'Every message is checked again before sending.' : 'Development mode · previews and reviews only. Live sending is disabled.'}</span>${action('kill', 'Pause all marketing', !capabilities.settings.enabled)}${action('rollout', 'Rollout settings')}${action('business-reports', 'Business reports')}</div>
+    <div class="crm-marketing-banner" role="status"><strong>${capabilities.settings.enabled ? 'Marketing enabled' : 'Marketing paused'}</strong><span>${marketingBannerDetail(capabilities)}</span>${action('kill', 'Pause all marketing', !capabilities.settings.enabled)}${action('rollout', 'Rollout settings')}${action('business-reports', 'Business reports')}</div>
     <div data-overview class="crm-overview-links"><a class="panel" href="#clients">Client directory<span>Existing · Future · Premium · Needs review</span></a><a class="panel" href="#whatsapp">Conversations<span>Read and review client replies</span></a></div>
     <section class="panel"><nav class="crm-directory-tabs" aria-label="Marketing workspace">${[['campaigns', 'Your batches'], ['audiences', 'Client groups'], ['content', 'Message & media'], ['tasks', 'Follow-ups'], ['pipeline', 'Opportunities'], ['replies', 'Review replies'], ['rules', 'Task rules'], ['legacy', 'Earlier batches']].map(([key, text]) => `<button class="button button-secondary" data-tab="${key}" aria-pressed="${key === tab}">${text}</button>`).join('')}</nav>
     <div class="toolbar" data-tools></div><p data-status role="status" aria-live="polite"></p><div data-workspace-list></div><div class="form-actions">${action('prev', 'Previous', true)}${action('next', 'Next', true)}</div></section>`;

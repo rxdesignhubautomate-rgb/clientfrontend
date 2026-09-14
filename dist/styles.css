@@ -207,12 +207,13 @@ tbody tr { cursor: pointer; transition: background .15s; } tbody tr:hover { back
 .wa-bubble p { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.45; }
 .wa-bubble p a { color: #1769aa; text-decoration: underline; overflow-wrap: anywhere; }
 .wa-bubble > .wa-message-meta { display: flex; align-items: center; justify-content: flex-end; gap: 3px; margin-top: 3px; color: #82908e; text-align: right; font-size: 8px; }
-.wa-delivery-status { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 12px; color: #778987; font-weight: 900; line-height: 1; }
+.wa-delivery-status { display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: auto; min-width: 18px; height: 12px; color: #778987; font-weight: 900; line-height: 1; }
 .wa-delivery-status svg { width: 18px; height: 13px; overflow: visible; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .wa-delivery-status.read { color: #34b7f1; }
 .wa-delivery-status.failed { width: 13px; color: #c44555; border: 1px solid currentColor; border-radius: 50%; font-size: 8px; }
 .wa-status-clock { width: 9px; height: 9px; border: 1.4px solid currentColor; border-radius: 50%; }
 .wa-status-clock::after { content: ""; display: block; width: 3px; height: 2px; margin: 1px 0 0 4px; border-bottom: 1px solid currentColor; border-left: 1px solid currentColor; }
+.wa-status-label { font-size: 9px; font-weight: 700; }
 .wa-bubble em { position: absolute; top: -7px; right: 8px; padding: 2px 5px; border-radius: 4px; color: #7e641e; background: #fff0b6; font-size: 7px; font-style: normal; font-weight: 900; }
 .wa-message-error { display: grid; gap: 4px; margin-top: 7px; padding: 7px 8px; border-radius: 7px; color: #9b3443; background: #ffeaed; font-size: 8px; }
 .wa-message-error strong, .wa-message-error span { display: block; text-align: left; }.wa-message-error button { width: fit-content; padding: 4px 7px; border: 0; border-radius: 6px; color: white; background: #b83f50; cursor: pointer; font-size: 8px; font-weight: 800; }
