@@ -2744,11 +2744,11 @@ async function openBulkUtilityDialog() {
       body.querySelector("#bulk-utility-order-count").textContent = `${selected.size} selected · maximum 50 per send`;
       body.querySelector("#bulk-utility-orders").innerHTML = visible.slice(0, 500).map((order) => {
         const orderId = order.orderId || order.id;
-        return `<label class="crm-utility-order"><input type="checkbox" data-utility-order="${attr(orderId)}" ${selected.has(orderId) ? "checked" : ""}> <span><strong>${esc(orderReference(order))}</strong><small>${esc(pretty(order.status))} · ${esc(order.contactId || "No linked contact")}</small></span></label>`;
+        return `<label class="crm-utility-order"><input type="checkbox" data-utility-order="${attr(orderId)}" ${selected.has(orderId) ? "checked" : ""}> <span><strong>${esc(orderReference(order))}</strong><small>${esc(pretty(order.status))} · ${esc(order.contactId || "Client will be matched by phone/company on send")}</small></span></label>`;
       }).join("") || '<div class="empty-state">No matching active orders.</div>';
     };
     body.innerHTML = `
-      <p>Choose a Meta-approved Utility template and active client orders. Already sent, queued, uncertain, STOP/opt-out, suppressed and duplicate numbers are skipped automatically.</p>
+      <p>Choose a Meta-approved Utility template and active client orders. Unlinked orders are safely matched to exactly one client by phone or exact company name before sending. Already sent, queued, uncertain, STOP/opt-out, suppressed and duplicate numbers are skipped automatically.</p>
       ${orderResponse.error ? `<p class="form-error">Some orders could not load: ${esc(orderResponse.error)}</p>` : ""}
       <div class="form-grid"><label>Utility template<select id="bulk-utility-template">${templates.map((template) => `<option value="${attr(template.id || template.key)}">${esc(template.name || template.id || template.key)} · ${esc(template.languageCode || template.language || "")}</option>`).join("")}</select></label><div><button type="button" class="button button-secondary" id="sync-utility-templates">Sync Meta templates</button></div></div>
       <div id="bulk-utility-template-area"></div>
