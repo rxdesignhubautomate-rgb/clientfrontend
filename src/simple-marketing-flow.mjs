@@ -2,9 +2,9 @@ export async function sendingAvailability(api) {
   try {
     const { data } = await api('/marketing-workspace/capabilities');
     if (!data?.enabled) return { allowed: true, message: '' };
-    if (!data.dispatchConfigured) return { allowed: false, message: 'Server sending is disabled. Check CRM_MARKETING_DISPATCH_ENABLED=true and NODE_ENV=production, then deploy.' };
-    if (!data.settings?.enabled) return { allowed: false, message: 'Organization sending is paused. An administrator can open Sending settings to enable it.' };
-    return { allowed: true, message: '' };
+    return data.dispatchConfigured && data.settings?.enabled
+      ? { allowed: true, message: '' }
+      : { allowed: false, message: 'Sending is paused on the server. You can preview and approve batches.' };
   } catch (error) {
     if (error.status === 404) return { allowed: true, message: '' };
     return { allowed: false, message: 'Sending status could not load. Refresh before starting a batch.' };
@@ -19,7 +19,6 @@ export function previewActions(status, role) {
   if (['APPROVED', 'SCHEDULED'].includes(status)) actions.push(['start', 'Start']);
   if (['ACTIVE', 'RUNNING'].includes(status)) actions.push(['pause', 'Pause']);
   if (status === 'PAUSED') actions.push(['resume', 'Resume']);
-  if (['COMPLETED', 'PAUSED'].includes(status) && admin) actions.push(['retry-failed', 'Retry failed']);
   if (!['COMPLETED', 'CANCELLED', 'FAILED'].includes(status)) actions.push(['cancel', 'Cancel batch']);
   return actions;
 }

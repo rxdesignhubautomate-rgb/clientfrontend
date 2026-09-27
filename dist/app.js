@@ -2,7 +2,7 @@ import { patchMarkup, patchNode, bindLiveEvent } from "./dom-patch.mjs";
 import { createChatCache } from "./chat-cache.js";
 import { uiIcon, avatarStyle, inboxMatches, inboxCounts, inboxOwners } from "./inbox-style.js";
 import { mountClientDirectory, openClassificationReview } from "./client-directory.mjs";
-import { mountContactWorkspace, openSendingSettings } from './marketing-workspace.mjs';
+import { mountContactWorkspace } from './marketing-workspace.mjs';
 import { sendingAvailability, previewActions, approvePreview } from './simple-marketing-flow.mjs';
 
 const config = window.__CRM_CONFIG__ || {};
@@ -182,6 +182,24 @@ async function uploadMarketingAsset(file) {
   const payload = await response.json().catch(() => ({}));
   if (response.status === 401) logout();
   if (!response.ok) throw new Error(payload.error?.message || payload.message || `Campaign media upload failed (${response.status})`);
+  return payload.data;
+}
+
+async function uploadUtilityAsset(file) {
+  if (!state.session) throw new Error("Authentication required");
+  if (Date.now() > Number(state.session.expiresAt || 0) - 60_000) await refreshSession();
+  const response = await fetch(`${config.apiBaseUrl}/attachments?purpose=UTILITY_TEMPLATE_ASSET`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${state.session.accessToken}`,
+      "content-type": file.type || "application/octet-stream",
+      "x-filename": encodeURIComponent(file.name || "utility-template-asset.bin")
+    },
+    body: file
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 401) logout();
+  if (!response.ok) throw new Error(payload.error?.message || payload.message || `Utility media upload failed (${response.status})`);
   return payload.data;
 }
 
@@ -2098,7 +2116,12 @@ function updateWhatsappFilterCounts() {
 function orderReference(order) { return order.orderNumber || `ORD-${String(order.orderId || "").slice(-8).toUpperCase()}`; }
 function suggestedTemplate(status) { return ({ CONFIRMED: "order_confirmation", DESIGN_READY: "design_ready", DISPATCHED: "dispatch_update", DELIVERED: "order_delivered" })[status] || null; }
 function orderStatusOptions(current) { return current && !ORDER_STATUSES.includes(current) ? [current, ...ORDER_STATUSES] : ORDER_STATUSES; }
-function renderUtilityPreview(template, values) { return template ? template.variables.reduce((text, field, index) => text.replaceAll(`{{${index + 1}}}`, values[field.key] || `{{${index + 1}}}`), template.body) : ""; }
+function renderUtilityPreview(template, values) {
+  return template ? (template.variables || []).reduce((text, field, index) => {
+    const value = values[field.key] || `{{${index + 1}}}`;
+    return text.replaceAll(`{{${index + 1}}}`, value).replaceAll(`{{${field.key}}}`, value);
+  }, template.body || "") : "";
+}
 function templateHeaderAccept(type) {
   return ({ IMAGE: "image/*", VIDEO: "video/*", DOCUMENT: ".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv" })[String(type || "").toUpperCase()] || "";
 }
@@ -2256,14 +2279,13 @@ async function renderMarketing() {
   const history = sorted.filter(item => ["COMPLETED", "CANCELLED", "FAILED"].includes(item.status));
   const active = sorted.filter(item => !history.includes(item));
   page.innerHTML = `<div class="simple-marketing">
-    <div class="section-head"><div><h1>Marketing</h1><p>Preview → Approve → Start</p></div><div class="simple-header-actions"><a class="button button-secondary" href="#whatsapp">View replies</a><button class="button button-secondary" id="refresh-marketing">Refresh</button></div></div>
+    <div class="section-head"><div><h1>Marketing</h1><p>Preview → Approve → Start</p></div><div class="simple-header-actions">${["OWNER","ADMIN"].includes(state.session?.role) ? '<button class="button button-primary" id="bulk-utility">Bulk Utility</button>' : ''}<a class="button button-secondary" href="#whatsapp">View replies</a><button class="button button-secondary" id="refresh-marketing">Refresh</button></div></div>
     <div class="simple-marketing-metrics">
       ${miniStat("Total contacts", counts ? formatCount(counts.totalContacts) : "—")}
       ${miniStat("Replied", counts ? formatCount(counts.replied) : "—")}
       ${miniStat("Opted out", counts ? formatCount(counts.optedOut) : "—")}
     </div>
-    <p class="muted simple-count-note">Choose a batch, check the message, approve it, then press Start. Opted-out contacts are excluded.</p>
-    ${['OWNER', 'ADMIN'].includes(state.session?.role) ? '<button class="button button-secondary" id="sending-settings">Sending settings</button>' : ''}
+    <p class="muted simple-count-note">Choose a batch, check the message, approve it, then press Start. Already sent, queued, uncertain, opted-out and duplicate recipients are excluded automatically; confirmed failures can be retried.</p>
     ${sending.message ? `<p class="form-error" role="status">${esc(sending.message)}</p>` : ''}
     ${summary.error ? '<div class="form-error">Contact counts could not load. Deploy the updated backend, then refresh.</div>' : ""}
     <section class="panel"><div class="panel-title-row"><div><h3>Your batches</h3><p>Open a batch to check the message and video.</p></div><span class="count-pill">${active.length} batches</span></div>
@@ -2274,7 +2296,7 @@ async function renderMarketing() {
     ${history.length ? `<details class="panel simple-history"><summary>Past & cancelled batches · ${history.length}</summary><div class="campaign-list">${history.map(simpleCampaignCard).join("")}</div></details>` : ""}
   </div>`;
   document.querySelector("#refresh-marketing").addEventListener("click", renderMarketing);
-  document.querySelector('#sending-settings')?.addEventListener('click', () => openSendingSettings({ api, onChanged: renderMarketing }).catch(error => notify(error.message, true)));
+  document.querySelector("#bulk-utility")?.addEventListener("click", openBulkUtilityDialog);
   document.querySelectorAll("[data-preview-batch]").forEach(button => button.addEventListener("click", () => showSimpleCampaignPreview(button.dataset.previewBatch, button)));
   startMarketingProgress();
 }
@@ -2647,6 +2669,153 @@ function campaignActionButtons(campaign) {
   if (!["COMPLETED", "CANCELLED", "FAILED"].includes(campaign.status)) actions.push(button("cancel", "Cancel"));
   return actions.join("");
 }
+
+function bulkUtilityDefault(field, index) {
+  const key = String(field?.key || "").replace(/^header_/, "");
+  const known = ["customer_name", "company_name", "contact_person", "order_reference", "order_value", "amount_due", "order_status", "city", "courier_name", "tracking_reference"];
+  if (known.includes(key)) return `{{${key}}}`;
+  return `{{${["customer_name", "order_reference", "order_status", "order_value"][index] || "customer_name"}}}`;
+}
+
+function bulkUtilitySampleContext(order = {}) {
+  return {
+    customer_name: "Customer",
+    company_name: "Customer company",
+    contact_person: "Customer",
+    order_reference: order.orderNumber || order.externalOrderId || order.orderId || "ORDER-001",
+    order_value: `${order.currency || "INR"} ${Number(order.totalAmount ?? order.orderAmount ?? order.finalAmount ?? 0).toLocaleString("en-IN")}`,
+    amount_due: String(order.amountDue ?? order.balanceAmount ?? "0"),
+    order_status: pretty(order.status || "CONFIRMED"),
+    city: order.city || order.deliveryAddress?.city || "Customer city",
+    courier_name: order.courierName || "Courier",
+    tracking_reference: order.trackingNumber || order.trackingReference || "TRACKING"
+  };
+}
+
+function resolveBulkUtilityValue(value, context) {
+  return String(value || "").replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => context[key] ?? "");
+}
+
+async function openBulkUtilityDialog() {
+  const dialog = smartDialog("Send approved Utility template in bulk", '<div class="crm-dialog-body"><p>Loading approved templates and active orders…</p></div>');
+  dialog.classList.add("crm-workspace-dialog", "crm-utility-batch-dialog");
+  const body = dialog.querySelector(".crm-dialog-body");
+  try {
+    const [templateResponse, orderResponse] = await Promise.all([
+      api("/whatsapp/utility-templates"),
+      loadAllBatchPages("/events/utility/batch/orders?limit=1000")
+    ]);
+    const templates = (templateResponse.data || []).filter((template) => template.approved === true);
+    const orders = orderResponse.data || [];
+    if (!templates.length) throw new Error("No approved Utility template found. Sync Meta templates first.");
+    let selectedTemplateKey = templates[0].id || templates[0].key;
+    let search = "";
+    const selected = new Set();
+    const mappings = {};
+    const currentTemplate = () => templates.find((item) => (item.id || item.key) === selectedTemplateKey) || templates[0];
+    const ensureMappings = () => (currentTemplate().variables || []).forEach((field, index) => {
+      if (!(field.key in mappings)) mappings[field.key] = bulkUtilityDefault(field, index);
+    });
+    const visibleOrders = () => orders.filter((order) => {
+      const haystack = [order.orderNumber, order.externalOrderId, order.orderId, order.contactId, order.status].join(" ").toLowerCase();
+      return haystack.includes(search.toLowerCase());
+    });
+    const renderTemplateArea = () => {
+      ensureMappings();
+      const template = currentTemplate();
+      const variables = template.variables || [];
+      const header = template.header || null;
+      const sample = orders.find((order) => selected.has(order.orderId || order.id)) || visibleOrders()[0] || {};
+      const context = bulkUtilitySampleContext(sample);
+      const values = Object.fromEntries(variables.map((field) => [field.key, resolveBulkUtilityValue(mappings[field.key], context)]));
+      body.querySelector("#bulk-utility-template-area").innerHTML = `
+        <p class="muted">${esc(template.name || template.key)} · ${esc(template.languageCode || template.language || "")}</p>
+        ${variables.length ? `<div class="form-grid">${variables.map((field, index) => `<label>${esc(field.label || field.key)}<input data-utility-variable="${attr(field.key)}" value="${attr(mappings[field.key] || bulkUtilityDefault(field, index))}" maxlength="500"><small>Use placeholders like {{customer_name}}, {{order_reference}}, {{order_status}}, {{order_value}}.</small></label>`).join("")}</div>` : '<p class="muted">This template has no variables.</p>'}
+        ${header?.type && header.type !== "TEXT" ? `<label>${header.required ? "Required" : "Optional"} ${esc(pretty(header.type))}<input id="bulk-utility-file" type="file" accept="${attr(templateHeaderAccept(header.type))}"></label>` : ""}
+        <label>Preview<textarea id="bulk-utility-preview" rows="5" readonly>${esc(renderUtilityPreview(template, values))}</textarea></label>`;
+      body.querySelectorAll("[data-utility-variable]").forEach((input) => input.addEventListener("input", () => {
+        mappings[input.dataset.utilityVariable] = input.value;
+        const previewValues = Object.fromEntries(variables.map((field) => [field.key, resolveBulkUtilityValue(mappings[field.key], context)]));
+        body.querySelector("#bulk-utility-preview").value = renderUtilityPreview(template, previewValues);
+      }));
+    };
+    const renderOrders = () => {
+      const visible = visibleOrders();
+      body.querySelector("#bulk-utility-order-count").textContent = `${selected.size} selected · maximum 50 per send`;
+      body.querySelector("#bulk-utility-orders").innerHTML = visible.slice(0, 500).map((order) => {
+        const orderId = order.orderId || order.id;
+        return `<label class="crm-utility-order"><input type="checkbox" data-utility-order="${attr(orderId)}" ${selected.has(orderId) ? "checked" : ""}> <span><strong>${esc(orderReference(order))}</strong><small>${esc(pretty(order.status))} · ${esc(order.contactId || "No linked contact")}</small></span></label>`;
+      }).join("") || '<div class="empty-state">No matching active orders.</div>';
+    };
+    body.innerHTML = `
+      <p>Choose a Meta-approved Utility template and active client orders. Already sent, queued, uncertain, STOP/opt-out, suppressed and duplicate numbers are skipped automatically.</p>
+      ${orderResponse.error ? `<p class="form-error">Some orders could not load: ${esc(orderResponse.error)}</p>` : ""}
+      <div class="form-grid"><label>Utility template<select id="bulk-utility-template">${templates.map((template) => `<option value="${attr(template.id || template.key)}">${esc(template.name || template.id || template.key)} · ${esc(template.languageCode || template.language || "")}</option>`).join("")}</select></label><div><button type="button" class="button button-secondary" id="sync-utility-templates">Sync Meta templates</button></div></div>
+      <div id="bulk-utility-template-area"></div>
+      <div class="panel-title-row"><div><h3>Active orders</h3><p id="bulk-utility-order-count">0 selected · maximum 50 per send</p></div><button type="button" class="button button-secondary" id="select-utility-orders">Select first 50 shown</button></div>
+      <label>Search orders<input id="bulk-utility-search" placeholder="Order number, contact or status"></label>
+      <div id="bulk-utility-orders" class="crm-utility-order-list"></div>
+      <label class="checkbox-row"><input id="bulk-utility-confirm" type="checkbox"> I confirm this is a transactional Utility update for these orders, not a promotion.</label>
+      <p id="bulk-utility-result" role="status"></p>
+      <div class="form-actions"><button type="button" class="button button-primary" id="send-bulk-utility">Send Utility batch</button></div>`;
+    renderTemplateArea();
+    renderOrders();
+    body.querySelector("#bulk-utility-template").addEventListener("change", (event) => { selectedTemplateKey = event.target.value; renderTemplateArea(); });
+    body.querySelector("#bulk-utility-search").addEventListener("input", (event) => { search = event.target.value.trim(); renderOrders(); });
+    body.querySelector("#bulk-utility-orders").addEventListener("change", (event) => {
+      const orderId = event.target.dataset.utilityOrder;
+      if (!orderId) return;
+      if (event.target.checked && selected.size >= 50) { event.target.checked = false; notify("Maximum 50 orders per Utility batch.", true); return; }
+      if (event.target.checked) selected.add(orderId); else selected.delete(orderId);
+      renderOrders(); renderTemplateArea();
+    });
+    body.querySelector("#select-utility-orders").addEventListener("click", () => {
+      selected.clear();
+      visibleOrders().slice(0, 50).forEach((order) => selected.add(order.orderId || order.id));
+      renderOrders(); renderTemplateArea();
+    });
+    body.querySelector("#sync-utility-templates").addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try { await api("/whatsapp/templates/sync", { method: "POST" }); dialog.close(); dialog.remove(); await openBulkUtilityDialog(); notify("Meta templates synced."); }
+      catch (error) { body.querySelector("#bulk-utility-result").textContent = error.message; event.currentTarget.disabled = false; }
+    });
+    body.querySelector("#send-bulk-utility").addEventListener("click", async (event) => {
+      const button = event.currentTarget;
+      const result = body.querySelector("#bulk-utility-result");
+      button.disabled = true; result.textContent = "";
+      try {
+        if (!selected.size) throw new Error("Select at least one active order.");
+        if (!body.querySelector("#bulk-utility-confirm").checked) throw new Error("Confirm transactional Utility use before sending.");
+        const template = currentTemplate();
+        (template.variables || []).forEach((field) => {
+          const input = [...body.querySelectorAll("[data-utility-variable]")].find((item) => item.dataset.utilityVariable === field.key);
+          mappings[field.key] = input?.value.trim() || "";
+        });
+        const file = body.querySelector("#bulk-utility-file")?.files?.[0];
+        if (template.header?.required && !file) throw new Error(`Upload the required ${pretty(template.header.type)} header.`);
+        if (file && !fileMatchesTemplateHeader(file, template.header?.type)) throw new Error(`Choose a ${pretty(template.header?.type)} file for this template.`);
+        result.textContent = file ? "Uploading template media…" : "Queuing Utility messages…";
+        const attachment = file ? await uploadUtilityAsset(file) : null;
+        const response = await api("/events/utility/batch", { method: "POST", body: {
+          orderIds: [...selected], templateKey: template.id || template.key, templateAttachmentId: attachment?.attachmentId || null,
+          variableValues: mappings, confirmTransactionalUse: true
+        } });
+        const data = response.data;
+        const excluded = Object.entries(data.exclusionCounts || {}).map(([reason, count]) => `${pretty(reason)}: ${count}`).join(" · ");
+        result.className = data.failed ? "form-error" : "form-success";
+        result.textContent = `${data.queued} queued · ${data.skipped} skipped · ${data.failed} failed${excluded ? ` · ${excluded}` : ""}`;
+        notify(`${data.queued} Utility messages queued.`);
+      } catch (error) {
+        result.className = "form-error"; result.textContent = error.message; button.disabled = false;
+      }
+    });
+  } catch (error) {
+    body.innerHTML = `<p class="form-error">${esc(error.message)}</p><button type="button" class="button button-secondary" id="sync-utility-empty">Sync Meta templates</button>`;
+    body.querySelector("#sync-utility-empty")?.addEventListener("click", async () => { await api("/whatsapp/templates/sync", { method: "POST" }); dialog.close(); dialog.remove(); openBulkUtilityDialog(); });
+  }
+}
+
+void campaignActionButtons;
 
 
 

@@ -49,98 +49,6 @@ function formDialog(title, html, submit, label = 'Save') {
 
 const baseFormDialog = formDialog;
 
-export async function openSendingSettings({ api, onChanged }) {
-  const request = async (path, body, method = 'PATCH') => (await api(`/marketing-workspace${path}`, body ? { method, body } : {})).data;
-  const capabilities = await request('/capabilities');
-  if (!capabilities.enabled) throw new Error('Marketing settings are unavailable on this server.');
-  let settings = capabilities.settings || {};
-  const configured = capabilities.dispatchConfigured === true;
-  const { dialog, close } = modal('Sending settings', `
-    <p>${configured ? 'Server sending is configured.' : 'Set CRM_MARKETING_DISPATCH_ENABLED=true and NODE_ENV=production on the backend, then deploy.'}</p>
-    <p>Organization sending: <strong>${settings.enabled ? 'Enabled' : 'Paused'}</strong> · Stage: ${esc(pretty(settings.rolloutStage) || 'Not configured')}</p>
-    <p>Enabling sending can release queued marketing messages. Approved batches can then be started from Marketing.</p>
-    <div class="form-actions"><button type="button" class="button button-primary" data-toggle ${!settings.enabled && !configured ? 'disabled' : ''}>${settings.enabled ? 'Pause sending' : 'Enable sending'}</button>
-    <button type="button" class="button button-secondary" data-rollout>Rollout settings</button>
-    <button type="button" class="button button-secondary" data-history ${settings.enabled ? 'disabled' : ''}>Prepare contacts & message history</button></div>
-    <p>Administrators can enable approved batches directly after preparing contacts and message history. Internal-test and pilot forms are optional.</p>
-    <p data-history-status role="status"></p>
-    ${!settings.enabled ? `<div class="form-actions"><button type="button" class="button button-primary" data-auto-activate ${!configured ? 'disabled' : ''}>Activate sending (one click)</button></div>
-    <p class="muted">Runs the contact/history preparation automatically, then enables sending directly — no internal-test or pilot stage. STOP, opt-out and delivery-history checks still apply to every message.</p>` : ''}`);
-  dialog.querySelector('[data-history]').onclick = async event => {
-    const button = event.currentTarget, status = dialog.querySelector('[data-history-status]');
-    button.disabled = true;
-    const toggle = dialog.querySelector('[data-toggle]'), rollout = dialog.querySelector('[data-rollout]');
-    toggle.disabled = true; rollout.disabled = true;
-    try {
-      let result;
-      do {
-        status.textContent = result?.phase === 'suppression'
-          ? `Checking saved STOP and opt-out records: ${result.scanned} of ${result.totalContacts} contacts prepared…`
-          : `Reconciling message history${result ? `: ${result.scanned} messages checked` : ''}…`;
-        result = await request('/history/prepare', {}, 'POST');
-      } while (!result.complete && dialog.isConnected);
-      status.textContent = result.ready
-        ? `Contact exclusions and history are prepared (${result.scanned} messages checked). You can now enable sending directly.`
-        : result.complete ? `${result.held} uncertain or incomplete messages need review against provider records. Sending remains paused.`
-        : 'Scan paused. Reopen Sending settings to continue.';
-    } catch (error) { status.textContent = error.status === 404 ? 'Deploy the updated backend to use history reconciliation.' : error.message; }
-    finally { button.disabled = false; toggle.disabled = !settings.enabled && !configured; rollout.disabled = false; }
-  };
-  const autoButton = dialog.querySelector('[data-auto-activate]');
-  if (autoButton) autoButton.onclick = () => {
-    formDialog('Activate sending', '<p>Automatically reconciles contacts and message history, then enables sending directly (no internal-test or pilot stage). This can take a few minutes for a large contact base.</p>' +
-      field('Reason', 'reason', 'Administrator authorizes direct sending of approved batches') +
-      '<p data-auto-status role="status"></p><div data-unresolved-list></div>', async (values, activeDialog) => {
-      const status = activeDialog.querySelector('[data-auto-status]');
-      let result;
-      do {
-        status.textContent = result?.phase === 'suppression'
-          ? `Checking saved STOP and opt-out records: ${result.scanned} of ${result.totalContacts} contacts prepared…`
-          : `Reconciling message history${result ? `: ${result.scanned} messages checked` : ''}…`;
-        result = await request('/history/prepare', {}, 'POST');
-      } while (!result.complete);
-      if (!result.ready) {
-        if (result.held) await renderUnresolved(activeDialog);
-        throw new Error(result.held
-          ? `${result.held} message(s) have uncertain delivery/opt-out history — review each below (checks against your WhatsApp provider records), then click Activate sending again.`
-          : 'Preparation did not complete. Reopen Sending settings and try again.');
-      }
-      status.textContent = 'Preparation complete. Enabling sending…';
-      await request('/settings', { enabled: true, reason: values.reason, directActivation: true });
-      close(); await onChanged();
-    }, 'Activate sending');
-    async function renderUnresolved(activeDialog) {
-      const list = activeDialog.querySelector('[data-unresolved-list]'), unresolved = await request('/messages/unresolved');
-      list.innerHTML = unresolved.items.length ? unresolved.items.map(item => `<article class="crm-workspace-row" data-unresolved-row="${esc(item.messageId)}"><div><strong>${esc(item.companyName)}</strong><p>${esc(item.destination || item.contactId)} · ${esc(stamp(item.createdAt))}</p></div><button type="button" class="button button-secondary" data-reconcile-inline="${esc(item.messageId)}">Review unknown result</button></article>`).join('')
-        : '<p>No unresolved messages found for your account scope. If the count above is nonzero, sign in as an owner/admin or ask them to review — item visibility follows normal record access.</p>';
-      list.querySelectorAll('[data-reconcile-inline]').forEach(button => { button.onclick = () => formDialog('Reconcile unknown submission', `<p>Check the provider record first (WhatsApp Business App or Manager). A timeout does not mean failure. Neither decision automatically resends the message.</p>${select('Verified result', 'outcome', [['ACCEPTED', 'Provider accepted it'], ['NOT_ACCEPTED', 'Provider definitively did not accept it']])}${field('Provider evidence reference', 'evidenceReference')}${field('Review reason', 'reason')}`, async values => {
-        await request(`/messages/${button.dataset.reconcileInline}/history-review`, values, 'POST');
-        activeDialog.querySelector(`[data-unresolved-row="${button.dataset.reconcileInline}"]`)?.remove();
-      }); });
-    }
-  };
-  dialog.querySelector('[data-toggle]').onclick = () => {
-    formDialog(settings.enabled ? 'Pause sending' : 'Enable sending', (settings.enabled ? '' : '<p>Enable sending to approved campaign recipients directly, without an internal-test or pilot stage. STOP, opt-out and delivery-history checks still apply.</p>') + field('Reason', 'reason', settings.enabled ? '' : 'Administrator authorizes direct sending of approved batches'), async values => {
-      await request('/settings', { enabled: !settings.enabled, reason: values.reason, directActivation: !settings.enabled });
-      close(); await onChanged();
-    }, settings.enabled ? 'Pause sending' : 'Enable sending');
-  };
-  dialog.querySelector('[data-rollout]').onclick = () => {
-    formDialog('Rollout settings', `<p>Saving a stage pauses sending. Start with 1–10 internal contacts, then review a pilot before full rollout.</p>
-      ${select('Stage', 'stage', [['INTERNAL_TEST', 'Internal test'], ['PILOT', 'Small approved pilot'], ['FULL', 'Full rollout after pilot review']])}
-      <label class="field">Contact IDs (comma separated)<textarea name="contactIds"></textarea></label>
-      ${field('Provider/account verification reference', 'providerReviewReference')}
-      <label class="field">Previous test / pilot review reference<input name="previousStageReviewReference" /></label>
-      ${field('Reason', 'reason')}`, async values => {
-      settings = await request('/rollout', { stage: values.stage, expectedVersion: settings.version || 0,
-        contactIds: values.contactIds.split(',').map(s => s.trim()).filter(Boolean),
-        providerReviewReference: values.providerReviewReference,
-        ...(values.previousStageReviewReference ? { previousStageReviewReference: values.previousStageReviewReference } : {}), reason: values.reason }, 'PUT');
-      close(); await onChanged(); await openSendingSettings({ api, onChanged });
-    });
-  };
-}
-
 export function audienceRule(fieldName, value) {
   if (['lastInteraction', 'lastMarketing'].includes(fieldName)) return { field: fieldName, op: value === 'unknown' ? 'unknown' : 'olderDays', ...(value === 'unknown' ? {} : { value: Number(value) }) };
   return { field: fieldName, op: fieldName === 'service' ? 'contains' : 'eq', value: fieldName === 'needsReview' ? value === 'true' : value };
@@ -329,7 +237,7 @@ export async function mountMarketingWorkspace({ page, api, capabilities, notify,
       patchMarkup(ctl, action('progress-refresh', 'Refresh progress') + (campaign.status === 'PREPARING' ? action('prepare', 'Review next 50 contacts') : campaign.status === 'REVIEW' ? action('approve', 'Approve frozen recipients') : ['APPROVED', 'PAUSED'].includes(campaign.status) ? action('start', capabilities.dispatchConfigured ? 'Start this batch' : 'Sending disabled in development', !capabilities.dispatchConfigured || !capabilities.settings.enabled) : '') + (['UPGRADE_RUNNING', 'COMPLETED'].includes(campaign.status) ? action('pause', 'Pause') : '') + (campaign.status !== 'CANCELLED' ? action('cancel', 'Cancel batch') : '') + action('link-order', 'Link an order') + action('finance', 'Linked order report'));
       patchMarkup(dialog.querySelector('[data-recipient-list]'), recipients.items.map(r => `<article class="crm-workspace-row" data-recipient-row="${esc(r.campaignEnrollmentId)}"><div><a href="#client/${encodeURIComponent(r.contactId)}">${esc(r.destination || r.contactId)}</a><p>${esc(pretty(r.deliveryState || r.status))}${r.errorCode ? ` · ${esc(pretty(r.errorCode))}` : ''}${r.suppressionReason ? ` · ${esc(pretty(r.suppressionReason))}` : ''}</p></div><button class="button button-secondary" data-preview-recipient="${esc(r.campaignEnrollmentId)}">Message preview</button>${r.deliveryState === 'DELIVERY_UNKNOWN' ? `<button class="button button-secondary" data-reconcile="${esc(r.messageId)}">Review unknown result</button>` : ''}</article>`).join('') || '<p>Prepare recipients to see their individual messages here.</p>');
       dialog.querySelectorAll('[data-preview-recipient]').forEach(b => { b.onclick = () => guard(async () => { const r = recipients.items.find(row => row.campaignEnrollmentId === b.dataset.previewRecipient); const { dialog: preview } = modal(`Message to ${r.destination || r.contactId}`, `<pre class="crm-message-preview">${esc(r.preparedMessage?.text || 'Not eligible / personalisation missing')}</pre><div data-media></div>${templateExtras(r.preparedMessage?.metadata?.providerComponents)}<p>Template: ${esc(r.preparedMessage?.metadata?.template?.name || 'Unavailable')} · content version ${esc(campaign.contentSnapshot.version)}</p>`); preview.querySelector('[data-media]').innerHTML = await mediaHtml(r.preparedMessage?.attachmentIds); }); });
-      dialog.querySelectorAll('[data-reconcile]').forEach(button => { button.onclick = () => formDialog('Reconcile unknown submission', `<p>Check the provider record first. A timeout does not mean failure. Neither decision automatically resends the message.</p>${select('Verified result', 'outcome', [['ACCEPTED', 'Provider accepted it'], ['NOT_ACCEPTED', 'Provider definitively did not accept it']])}<label class="field">Provider message ID (required for accepted)<input name="providerMessageId" /></label>${field('Provider evidence reference', 'evidenceReference')}${field('Review reason', 'reason')}`, async values => { if (!values.providerMessageId) delete values.providerMessageId; await request(`/messages/${button.dataset.reconcile}/reconcile`, values, 'POST'); await refresh(); }); });
+      dialog.querySelectorAll('[data-reconcile]').forEach(button => { button.onclick = () => formDialog('Reconcile unknown submission', `<p>Check the provider record first. A timeout does not mean failure. Neither decision automatically resends the message.</p>${select('Verified result', 'outcome', [['ACCEPTED', 'Provider accepted it'], ['NOT_ACCEPTED', 'Provider definitively did not accept it']])}<label class="field">Provider message ID (required for accepted)<input name="providerMessageId" /></label>${field('Provider evidence reference', 'evidenceReference')}${field('Review reason', 'reason')}`, async values => { if (!values.providerMessageId) delete values.providerMessageId; await request(`/messages/${button.dataset.reconcile}/reconcile`, values); await refresh(); }); });
       const nextButton = dialog.querySelector('[data-action="recipient-next"]'); nextButton.disabled = !recipients.pagination.hasMore; nextButton.onclick = () => guard(async () => { recipientCursor = recipients.pagination.nextCursor; await refresh(); });
       ctl.onclick = event => guard(async () => {
         const button = event.target.closest('[data-action]'), key = button?.dataset.action; if (!key) return;

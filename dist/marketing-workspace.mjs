@@ -49,63 +49,6 @@ function formDialog(title, html, submit, label = 'Save') {
 
 const baseFormDialog = formDialog;
 
-export async function openSendingSettings({ api, onChanged }) {
-  const request = async (path, body, method = 'PATCH') => (await api(`/marketing-workspace${path}`, body ? { method, body } : {})).data;
-  const capabilities = await request('/capabilities');
-  if (!capabilities.enabled) throw new Error('Marketing settings are unavailable on this server.');
-  let settings = capabilities.settings || {};
-  const configured = capabilities.dispatchConfigured === true;
-  const { dialog, close } = modal('Sending settings', `
-    <p>${configured ? 'Server sending is configured.' : 'Set CRM_MARKETING_DISPATCH_ENABLED=true and NODE_ENV=production on the backend, then deploy.'}</p>
-    <p>Organization sending: <strong>${settings.enabled ? 'Enabled' : 'Paused'}</strong> · Stage: ${esc(pretty(settings.rolloutStage) || 'Not configured')}</p>
-    <p>Enabling sending can release queued marketing messages. Approved batches can then be started from Marketing.</p>
-    <div class="form-actions"><button type="button" class="button button-primary" data-toggle ${!settings.enabled && !configured ? 'disabled' : ''}>${settings.enabled ? 'Pause sending' : 'Enable sending'}</button>
-    <button type="button" class="button button-secondary" data-rollout>Rollout settings</button>
-    <button type="button" class="button button-secondary" data-history ${settings.enabled ? 'disabled' : ''}>Prepare contacts & message history</button></div>
-    <p>Administrators can enable approved batches directly after preparing contacts and message history. Internal-test and pilot forms are optional.</p>
-    <p data-history-status role="status"></p>`);
-  dialog.querySelector('[data-history]').onclick = async event => {
-    const button = event.currentTarget, status = dialog.querySelector('[data-history-status]');
-    button.disabled = true;
-    const toggle = dialog.querySelector('[data-toggle]'), rollout = dialog.querySelector('[data-rollout]');
-    toggle.disabled = true; rollout.disabled = true;
-    try {
-      let result;
-      do {
-        status.textContent = result?.phase === 'suppression'
-          ? `Checking saved STOP and opt-out records: ${result.scanned} of ${result.totalContacts} contacts prepared…`
-          : `Reconciling message history${result ? `: ${result.scanned} messages checked` : ''}…`;
-        result = await request('/history/prepare', {}, 'POST');
-      } while (!result.complete && dialog.isConnected);
-      status.textContent = result.ready
-        ? `Contact exclusions and history are prepared (${result.scanned} messages checked). You can now enable sending directly.`
-        : result.complete ? `${result.held} uncertain or incomplete messages need review against provider records. Sending remains paused.`
-        : 'Scan paused. Reopen Sending settings to continue.';
-    } catch (error) { status.textContent = error.status === 404 ? 'Deploy the updated backend to use history reconciliation.' : error.message; }
-    finally { button.disabled = false; toggle.disabled = !settings.enabled && !configured; rollout.disabled = false; }
-  };
-  dialog.querySelector('[data-toggle]').onclick = () => {
-    formDialog(settings.enabled ? 'Pause sending' : 'Enable sending', (settings.enabled ? '' : '<p>Enable sending to approved campaign recipients directly, without an internal-test or pilot stage. STOP, opt-out and delivery-history checks still apply.</p>') + field('Reason', 'reason', settings.enabled ? '' : 'Administrator authorizes direct sending of approved batches'), async values => {
-      await request('/settings', { enabled: !settings.enabled, reason: values.reason, directActivation: !settings.enabled });
-      close(); await onChanged();
-    }, settings.enabled ? 'Pause sending' : 'Enable sending');
-  };
-  dialog.querySelector('[data-rollout]').onclick = () => {
-    formDialog('Rollout settings', `<p>Saving a stage pauses sending. Start with 1–10 internal contacts, then review a pilot before full rollout.</p>
-      ${select('Stage', 'stage', [['INTERNAL_TEST', 'Internal test'], ['PILOT', 'Small approved pilot'], ['FULL', 'Full rollout after pilot review']])}
-      <label class="field">Contact IDs (comma separated)<textarea name="contactIds"></textarea></label>
-      ${field('Provider/account verification reference', 'providerReviewReference')}
-      <label class="field">Previous test / pilot review reference<input name="previousStageReviewReference" /></label>
-      ${field('Reason', 'reason')}`, async values => {
-      settings = await request('/rollout', { stage: values.stage, expectedVersion: settings.version || 0,
-        contactIds: values.contactIds.split(',').map(s => s.trim()).filter(Boolean),
-        providerReviewReference: values.providerReviewReference,
-        ...(values.previousStageReviewReference ? { previousStageReviewReference: values.previousStageReviewReference } : {}), reason: values.reason }, 'PUT');
-      close(); await onChanged(); await openSendingSettings({ api, onChanged });
-    });
-  };
-}
-
 export function audienceRule(fieldName, value) {
   if (['lastInteraction', 'lastMarketing'].includes(fieldName)) return { field: fieldName, op: value === 'unknown' ? 'unknown' : 'olderDays', ...(value === 'unknown' ? {} : { value: Number(value) }) };
   return { field: fieldName, op: fieldName === 'service' ? 'contains' : 'eq', value: fieldName === 'needsReview' ? value === 'true' : value };
